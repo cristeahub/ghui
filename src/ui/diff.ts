@@ -114,14 +114,43 @@ const filetypeForPath = (path: string) => {
 
 const unquoteDiffPath = (path: string) => path.replace(/^"|"$/g, "").replace(/^a\//, "").replace(/^b\//, "")
 
+const readDiffPath = (value: string, start: number) => {
+	if (value[start] === '"') {
+		for (let index = start + 1; index < value.length; index++) {
+			if (value[index] === '"' && value[index - 1] !== "\\") {
+				const raw = value.slice(start, index + 1)
+				try {
+					return { path: JSON.parse(raw) as string, end: index + 1 }
+				} catch {
+					return { path: raw, end: index + 1 }
+				}
+			}
+		}
+	}
+
+	const end = value.slice(start).search(/\s/)
+	const pathEnd = end >= 0 ? start + end : value.length
+	return { path: value.slice(start, pathEnd), end: pathEnd }
+}
+
+const parseDiffGitPaths = (line: string) => {
+	const prefix = "diff --git "
+	if (!line.startsWith(prefix)) return null
+	const left = readDiffPath(line, prefix.length)
+	const rightStart = line.slice(left.end).search(/\S/)
+	if (rightStart < 0) return null
+	const right = readDiffPath(line, left.end + rightStart)
+	return [left.path, right.path] as const
+}
+
 const patchFileName = (patch: string) => {
 	const diffLine = patch.split("\n").find((line) => line.startsWith("diff --git "))
 	if (diffLine) {
-		const match = diffLine.match(/^diff --git\s+(\S+)\s+(\S+)/)
-		if (match) {
-			const next = unquoteDiffPath(match[2]!)
+		const paths = parseDiffGitPaths(diffLine)
+		if (paths) {
+			const next = unquoteDiffPath(paths[1])
 			if (next !== "/dev/null") return next
-			return unquoteDiffPath(match[1]!)
+			return unquoteDiffPath(paths[0])
 		}
 	}
 

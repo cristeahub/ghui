@@ -1,4 +1,5 @@
 export type ThemeId =
+	| "system"
 	| "ghui"
 	| "tokyo-night"
 	| "catppuccin"
@@ -60,6 +61,99 @@ export interface ThemeDefinition {
 	readonly colors: ColorPalette
 }
 
+interface TerminalThemeColors {
+	readonly palette: readonly (string | null)[]
+	readonly defaultForeground: string | null
+	readonly defaultBackground: string | null
+	readonly highlightBackground: string | null
+	readonly highlightForeground: string | null
+}
+
+const readableHex = (value: string | null | undefined, fallback: string) =>
+	typeof value === "string" && /^#[0-9a-fA-F]{6}(?:[0-9a-fA-F]{2})?$/.test(value) ? value : fallback
+
+const hexToRgb = (hex: string) => {
+	const value = hex.replace(/^#/, "").slice(0, 6)
+	return {
+		r: parseInt(value.slice(0, 2), 16),
+		g: parseInt(value.slice(2, 4), 16),
+		b: parseInt(value.slice(4, 6), 16),
+	}
+}
+
+const luminance = (hex: string) => {
+	const { r, g, b } = hexToRgb(hex)
+	return 0.299 * r + 0.587 * g + 0.114 * b
+}
+
+const rgbToHex = ({ r, g, b }: { readonly r: number; readonly g: number; readonly b: number }) =>
+	`#${[r, g, b].map((component) => Math.max(0, Math.min(255, Math.round(component))).toString(16).padStart(2, "0")).join("")}`
+
+const mixHex = (base: string, overlay: string, amount: number) => {
+	const from = hexToRgb(base)
+	const to = hexToRgb(overlay)
+	return rgbToHex({
+		r: from.r + (to.r - from.r) * amount,
+		g: from.g + (to.g - from.g) * amount,
+		b: from.b + (to.b - from.b) * amount,
+	})
+}
+
+const grayscaleRamp = (background: string) => {
+	const bg = hexToRgb(background)
+	const bgLum = luminance(background)
+	const isDark = bgLum < 128
+	const grays: Record<number, string> = {}
+
+	for (let i = 1; i <= 12; i++) {
+		const factor = i / 12
+		let r: number
+		let g: number
+		let b: number
+
+		if (isDark) {
+			if (bgLum < 10) {
+				const value = Math.floor(factor * 0.4 * 255)
+				r = value
+				g = value
+				b = value
+			} else {
+				const nextLum = bgLum + (255 - bgLum) * factor * 0.4
+				const ratio = nextLum / bgLum
+				r = Math.min(bg.r * ratio, 255)
+				g = Math.min(bg.g * ratio, 255)
+				b = Math.min(bg.b * ratio, 255)
+			}
+		} else if (bgLum > 245) {
+			const value = Math.floor(255 - factor * 0.4 * 255)
+			r = value
+			g = value
+			b = value
+		} else {
+			const nextLum = bgLum * (1 - factor * 0.4)
+			const ratio = nextLum / bgLum
+			r = Math.max(bg.r * ratio, 0)
+			g = Math.max(bg.g * ratio, 0)
+			b = Math.max(bg.b * ratio, 0)
+		}
+
+		grays[i] = rgbToHex({ r, g, b })
+	}
+
+	return grays
+}
+
+const mutedTextColor = (background: string) => {
+	const bgLum = luminance(background)
+	const isDark = bgLum < 128
+	const value = isDark
+		? bgLum < 10 ? 180 : Math.min(Math.floor(160 + bgLum * 0.3), 200)
+		: bgLum > 245 ? 75 : Math.max(Math.floor(100 - (255 - bgLum) * 0.2), 60)
+	return rgbToHex({ r: value, g: value, b: value })
+}
+
+const contrastText = (background: string) => luminance(background) > 128 ? "#000000" : "#ffffff"
+
 const ghuiColors: ColorPalette = {
 	background: "#111018",
 	modalBackground: "#1a1a2e",
@@ -98,6 +192,69 @@ const ghuiColors: ColorPalette = {
 		removedLineNumberBg: "#35171b",
 	},
 }
+
+const makeSystemColors = (terminal?: TerminalThemeColors): ColorPalette => {
+	const palette = terminal?.palette ?? []
+	const terminalBackground = readableHex(terminal?.defaultBackground, readableHex(palette[0], "#000000"))
+	const text = readableHex(terminal?.defaultForeground, readableHex(palette[7], "#ffffff"))
+	const grays = grayscaleRamp(terminalBackground)
+	const isDark = luminance(terminalBackground) < 128
+	const red = readableHex(palette[1], "#cc0000")
+	const green = readableHex(palette[2], "#4e9a06")
+	const yellow = readableHex(palette[3], "#c4a000")
+	const blue = readableHex(palette[4], "#3465a4")
+	const magenta = readableHex(palette[5], "#75507b")
+	const cyan = readableHex(palette[6], "#06989a")
+	const brightBlack = readableHex(palette[8], mutedTextColor(terminalBackground))
+	const brightGreen = readableHex(palette[10], green)
+	const brightMagenta = readableHex(palette[13], magenta)
+	const panel = grays[2] ?? mixHex(terminalBackground, text, isDark ? 0.07 : 0.08)
+	const element = grays[3] ?? mixHex(terminalBackground, text, isDark ? 0.1 : 0.1)
+	const border = grays[7] ?? mixHex(terminalBackground, text, isDark ? 0.24 : 0.24)
+	const borderSubtle = grays[6] ?? border
+	const diffAlpha = isDark ? 0.22 : 0.14
+
+	return {
+		background: "transparent",
+		modalBackground: panel,
+		text,
+		muted: mutedTextColor(terminalBackground),
+		separator: border,
+		accent: cyan,
+		inlineCode: brightGreen,
+		error: red,
+		selectedBg: cyan,
+		selectedText: contrastText(cyan),
+		count: cyan,
+		status: {
+			draft: yellow,
+			approved: green,
+			changes: red,
+			review: cyan,
+			none: brightBlack,
+			passing: green,
+			pending: yellow,
+			failing: red,
+		},
+		repos: {
+			opencode: cyan,
+			"effect-smol": green,
+			"opencode-console": brightMagenta,
+			opencontrol: yellow,
+			default: blue,
+		},
+		diff: {
+			addedBg: mixHex(terminalBackground, green, diffAlpha),
+			removedBg: mixHex(terminalBackground, red, diffAlpha),
+			contextBg: panel,
+			lineNumberBg: borderSubtle,
+			addedLineNumberBg: mixHex(element, green, diffAlpha),
+			removedLineNumberBg: mixHex(element, red, diffAlpha),
+		},
+	}
+}
+
+const systemColors: ColorPalette = makeSystemColors()
 
 const tokyoNightColors: ColorPalette = {
 	background: "#1a1b26",
@@ -607,6 +764,7 @@ const vesperColors: ColorPalette = {
 }
 
 export const themeDefinitions: readonly ThemeDefinition[] = [
+	{ id: "system", name: "System", description: "Use the terminal foreground, background, and ANSI palette", colors: systemColors },
 	{ id: "ghui", name: "GHUI", description: "Warm parchment accents on a deep slate background", colors: ghuiColors },
 	{ id: "tokyo-night", name: "Tokyo Night", description: "Cool indigo surfaces with neon editor accents", colors: tokyoNightColors },
 	{ id: "catppuccin", name: "Catppuccin", description: "Mocha lavender, peach, and soft pastel contrast", colors: catppuccinColors },
@@ -623,7 +781,7 @@ export const themeDefinitions: readonly ThemeDefinition[] = [
 	{ id: "opencode", name: "OpenCode", description: "Charcoal panels with peach, violet, and blue highlights", colors: opencodeColors },
 ] as const
 
-let activeTheme = themeDefinitions[0]!
+let activeTheme = themeDefinitions.find((theme) => theme.id === "ghui") ?? themeDefinitions[0]!
 
 export const colors: ColorPalette = { ...ghuiColors }
 
@@ -645,4 +803,11 @@ export const setActiveTheme = (id: ThemeId) => {
 	if (activeTheme.id === id) return
 	activeTheme = getThemeDefinition(id)
 	Object.assign(colors, activeTheme.colors)
+}
+
+export const setSystemThemeColors = (terminalColors: TerminalThemeColors) => {
+	Object.assign(systemColors, makeSystemColors(terminalColors))
+	if (activeTheme.id === "system") {
+		Object.assign(colors, systemColors)
+	}
 }

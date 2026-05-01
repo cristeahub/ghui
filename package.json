@@ -35,6 +35,9 @@
 		"ghui": "bin/ghui.js"
 	},
 	"scripts": {
+		"changeset": "npm exec --package @changesets/cli@2.31.0 -- changeset",
+		"changeset:status": "npm exec --package @changesets/cli@2.31.0 -- changeset status",
+		"changeset:version": "npm exec --package @changesets/cli@2.31.0 -- changeset version",
 		"dev": "bun --watch bin/ghui.js",
 		"start": "bun run src/index.tsx",
 		"test": "bun test test",

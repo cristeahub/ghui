@@ -6,19 +6,21 @@ export type LoadStatus = Schema.Schema.Type<typeof LoadStatus>
 export const PullRequestState = Schema.Literals(["open", "closed", "merged"])
 export type PullRequestState = Schema.Schema.Type<typeof PullRequestState>
 
-export const PullRequestQueueMode = Schema.Literals(["authored", "review", "assigned", "mentioned"])
+export const PullRequestQueueMode = Schema.Literals(["repository", "authored", "review", "assigned", "mentioned"])
 export type PullRequestQueueMode = Schema.Schema.Type<typeof PullRequestQueueMode>
-export const pullRequestQueueModes = PullRequestQueueMode.literals
+export const pullRequestQueueModes = PullRequestQueueMode.literals.filter((mode) => mode !== "repository")
 
 export const pullRequestQueueLabels = {
+	repository: "repository",
 	authored: "authored",
 	review: "review requested",
 	assigned: "assigned",
 	mentioned: "mentioned",
 } as const satisfies Record<PullRequestQueueMode, string>
 
-export const pullRequestQueueSearchQualifier = (mode: PullRequestQueueMode, author: string) => {
+export const pullRequestQueueSearchQualifier = (mode: PullRequestQueueMode, author: string, repository: string | null) => {
 	const qualifiers = {
+		repository: repository ? `repo:${repository}` : `author:${author}`,
 		authored: `author:${author}`,
 		review: "review-requested:@me",
 		assigned: "assignee:@me",

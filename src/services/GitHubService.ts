@@ -103,9 +103,21 @@ const PullRequestCommentSchema = Schema.Struct({
 	side: Schema.optionalKey(Schema.NullOr(DiffCommentSide)),
 })
 
+const PullRequestFileSchema = Schema.Struct({
+	filename: Schema.String,
+	previous_filename: OptionalNullableString,
+	status: OptionalNullableString,
+	patch: OptionalNullableString,
+})
+
 const CommentsResponseSchema = Schema.Union([
 	Schema.Array(PullRequestCommentSchema),
 	Schema.Array(Schema.Array(PullRequestCommentSchema)),
+])
+
+const PullRequestFilesResponseSchema = Schema.Union([
+	Schema.Array(PullRequestFileSchema),
+	Schema.Array(Schema.Array(PullRequestFileSchema)),
 ])
 
 const RepoLabelsResponseSchema = Schema.Array(Schema.Struct({
@@ -117,6 +129,7 @@ type RawPullRequestSummaryNode = Schema.Schema.Type<typeof RawPullRequestSummary
 type RawPullRequestNode = Schema.Schema.Type<typeof RawPullRequestNodeSchema>
 type RawCheckContext = Schema.Schema.Type<typeof RawCheckContextSchema>
 type RawPullRequestComment = Schema.Schema.Type<typeof PullRequestCommentSchema>
+type RawPullRequestFile = Schema.Schema.Type<typeof PullRequestFileSchema>
 
 type SearchResponse<Item> = {
 	readonly data: {
@@ -338,7 +351,10 @@ const parsePullRequest = (item: RawPullRequestNode): PullRequestItem => {
 	}
 }
 
-const searchQuery = (mode: PullRequestQueueMode, author: string) => `${pullRequestQueueSearchQualifier(mode, author)} is:pr is:open sort:created-desc`
+const searchQuery = (mode: PullRequestQueueMode, author: string) => {
+	const sort = mode === "repository" ? "sort:updated-desc" : "sort:created-desc"
+	return `${pullRequestQueueSearchQualifier(mode, author, config.repository)} is:pr is:open ${sort}`
+}
 
 const sortNewestFirst = (pullRequests: readonly PullRequestItem[]) =>
 	[...pullRequests].sort((left, right) => right.createdAt.getTime() - left.createdAt.getTime())
@@ -359,14 +375,39 @@ const parsePullRequestComment = (comment: RawPullRequestComment): PullRequestRev
 }
 
 const parsePullRequestComments = (response: Schema.Schema.Type<typeof CommentsResponseSchema>): readonly PullRequestReviewComment[] => {
-	const pages: readonly (readonly RawPullRequestComment[])[] = Array.isArray(response[0])
-		? response as readonly (readonly RawPullRequestComment[])[]
-		: [response as readonly RawPullRequestComment[]]
-	return pages.flatMap((page) => page.flatMap((comment) => {
+	return flattenSlurpedPages(response).flatMap((comment) => {
 		const parsed = parsePullRequestComment(comment)
 		return parsed ? [parsed] : []
-	}))
+	})
 }
+
+const flattenSlurpedPages = <Item>(response: readonly Item[] | readonly (readonly Item[])[]): readonly Item[] =>
+	Array.isArray(response[0]) ? (response as readonly (readonly Item[])[]).flat() : response as readonly Item[]
+
+const parsePullRequestFiles = (response: Schema.Schema.Type<typeof PullRequestFilesResponseSchema>): readonly RawPullRequestFile[] =>
+	flattenSlurpedPages(response)
+
+const diffPath = (path: string) => /\s|"/.test(path) ? JSON.stringify(path) : path
+
+const prefixedDiffPath = (prefix: "a" | "b", path: string) => diffPath(`${prefix}/${path}`)
+
+const fileHeaderPatch = (file: RawPullRequestFile) => {
+	const oldPath = file.previous_filename ?? file.filename
+	const newPath = file.filename
+	const oldRef = file.status === "added" ? "/dev/null" : prefixedDiffPath("a", oldPath)
+	const newRef = file.status === "removed" ? "/dev/null" : prefixedDiffPath("b", newPath)
+	const lines = [
+		`diff --git ${prefixedDiffPath("a", oldPath)} ${prefixedDiffPath("b", newPath)}`,
+		...(file.status === "renamed" && file.previous_filename ? [`rename from ${oldPath}`, `rename to ${newPath}`] : []),
+		`--- ${oldRef}`,
+		`+++ ${newRef}`,
+	]
+	if (file.patch) lines.push(file.patch.trimEnd())
+	return lines.join("\n")
+}
+
+export const pullRequestFilesToPatch = (files: readonly RawPullRequestFile[]) =>
+	files.map(fileHeaderPatch).join("\n")
 
 const fallbackCreatedComment = (input: CreatePullRequestCommentInput): PullRequestReviewComment => ({
 	id: `created:${input.repository}:${input.number}:${input.path}:${input.side}:${input.line}:${Date.now()}`,
@@ -393,7 +434,7 @@ export class GitHubService extends Context.Service<GitHubService, {
 	readonly listOpenPullRequests: (mode: PullRequestQueueMode) => Effect.Effect<readonly PullRequestItem[], GitHubError>
 	readonly listOpenPullRequestDetails: (mode: PullRequestQueueMode) => Effect.Effect<readonly PullRequestItem[], GitHubError>
 	readonly getAuthenticatedUser: () => Effect.Effect<string, GitHubError>
-	readonly getPullRequestDiff: (repository: string, number: number) => Effect.Effect<string, CommandError>
+	readonly getPullRequestDiff: (repository: string, number: number) => Effect.Effect<string, GitHubError>
 	readonly listPullRequestComments: (repository: string, number: number) => Effect.Effect<readonly PullRequestReviewComment[], GitHubError>
 	readonly getPullRequestMergeInfo: (repository: string, number: number) => Effect.Effect<PullRequestMergeInfo, GitHubError>
 	readonly mergePullRequest: (repository: string, number: number, action: PullRequestMergeAction) => Effect.Effect<void, CommandError>
@@ -447,8 +488,10 @@ export class GitHubService extends Context.Service<GitHubService, {
 			})
 
 			const getPullRequestDiff = Effect.fn("GitHubService.getPullRequestDiff")(function*(repository: string, number: number) {
-				const result = yield* command.run("gh", ["pr", "diff", String(number), "--repo", repository, "--color", "never"])
-				return result.stdout
+				const response = yield* command.runSchema(PullRequestFilesResponseSchema, "gh", [
+					"api", "--paginate", "--slurp", `repos/${repository}/pulls/${number}/files`,
+				])
+				return pullRequestFilesToPatch(parsePullRequestFiles(response))
 			})
 
 			const listPullRequestComments = Effect.fn("GitHubService.listPullRequestComments")(function*(repository: string, number: number) {

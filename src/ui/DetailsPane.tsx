@@ -22,6 +22,7 @@ export interface DetailPlaceholderContent {
 
 export const DETAIL_BODY_LINES = 6
 export const DETAIL_PLACEHOLDER_ROWS = 4
+export const DETAIL_BODY_SCROLL_LIMIT = 1_000
 
 const pullRequestReferencePattern = /(#[0-9]+)/g
 
@@ -280,6 +281,10 @@ export const getDetailBodyHeight = (pullRequest: PullRequestItem | null, content
 	return bodyPreview(pullRequest.body, contentWidth, bodyLines).length
 }
 
+export const getScrollableDetailBodyHeight = (pullRequest: PullRequestItem | null, contentWidth: number) => {
+	return getDetailBodyHeight(pullRequest, contentWidth, DETAIL_BODY_SCROLL_LIMIT)
+}
+
 export const getDetailsPaneHeight = ({
 	pullRequest,
 	contentWidth,
@@ -316,11 +321,10 @@ export const DetailHeader = ({
 	const statsText = diffStatText(pullRequest)
 	const labelsWidth = !pullRequest.detailLoaded
 		? "loading details...".length
-		: labels.length > 0
-		? labels.reduce((total, label, index) => total + label.name.length + 2 + (index > 0 ? 1 : 0), 0)
-		: "no labels".length
-	const showStats = contentWidth - labelsWidth - statsText.length >= 2
-	const statsGap = Math.max(2, contentWidth - labelsWidth - statsText.length)
+		: labels.reduce((total, label, index) => total + label.name.length + 2 + (index > 0 ? 1 : 0), 0)
+	const hasLabelContent = labelsWidth > 0
+	const showStats = contentWidth - labelsWidth - statsText.length >= (hasLabelContent ? 2 : 0)
+	const statsGap = Math.max(hasLabelContent ? 2 : 0, contentWidth - labelsWidth - statsText.length)
 	const opened = formatRelativeDate(pullRequest.createdAt)
 	const repo = shortRepoName(pullRequest.repository)
 	const author = viewerUsername && pullRequest.author !== viewerUsername ? ` by ${pullRequest.author}` : ""
@@ -359,10 +363,10 @@ export const DetailHeader = ({
 							{index > 0 ? <span fg={colors.muted}> </span> : null}
 							<span bg={labelColor(label)} fg={labelTextColor(labelColor(label))}> {label.name} </span>
 						</Fragment>
-					)) : <span fg={colors.muted}>no labels</span>}
+					)) : null}
 					{showStats ? (
 						<>
-							<span fg={colors.muted}>{" ".repeat(statsGap)}</span>
+							{statsGap > 0 ? <span fg={colors.muted}>{" ".repeat(statsGap)}</span> : null}
 							<DiffStats pullRequest={pullRequest} />
 						</>
 					) : null}
@@ -385,18 +389,20 @@ export const DetailBody = ({
 	pullRequest,
 	contentWidth,
 	bodyLines = DETAIL_BODY_LINES,
+	bodyLineLimit = bodyLines,
 	loadingIndicator,
 	themeId,
 }: {
 	pullRequest: PullRequestItem
 	contentWidth: number
 	bodyLines?: number
+	bodyLineLimit?: number
 	loadingIndicator: string
 	themeId: ThemeId
 }) => {
 	const previewLines = useMemo(
-		() => bodyPreview(pullRequest.body, contentWidth, bodyLines),
-		[pullRequest.body, contentWidth, bodyLines, themeId],
+		() => bodyPreview(pullRequest.body, contentWidth, bodyLineLimit),
+		[pullRequest.body, contentWidth, bodyLineLimit, themeId],
 	)
 
 	if (!pullRequest.detailLoaded) {
@@ -412,7 +418,7 @@ export const DetailBody = ({
 	}
 
 	return (
-		<box flexDirection="column" paddingLeft={1} paddingRight={1}>
+		<box flexDirection="column" paddingLeft={1} paddingRight={1} height={previewLines.length}>
 			{previewLines.map((line, index) => (
 				<TextLine key={`${pullRequest.url}-${index}`}>
 					{line.segments.map((segment, segmentIndex) => (
@@ -484,6 +490,7 @@ export const DetailsPane = ({
 	viewerUsername,
 	contentWidth,
 	bodyLines = DETAIL_BODY_LINES,
+	bodyLineLimit = bodyLines,
 	paneWidth = contentWidth + 2,
 	showChecks = false,
 	placeholderContent,
@@ -494,20 +501,21 @@ export const DetailsPane = ({
 	viewerUsername: string | null
 	contentWidth: number
 	bodyLines?: number
+	bodyLineLimit?: number
 	paneWidth?: number
 	showChecks?: boolean
 	placeholderContent: DetailPlaceholderContent
 	loadingIndicator: string
 	themeId: ThemeId
 }) => {
-	const contentHeight = getDetailsPaneHeight({ pullRequest, contentWidth, bodyLines, paneWidth, showChecks })
+	const contentHeight = getDetailsPaneHeight({ pullRequest, contentWidth, bodyLines: bodyLineLimit, paneWidth, showChecks })
 
 	return (
 		<box flexDirection="column" height={contentHeight}>
 			{pullRequest ? (
 				<>
 					<DetailHeader pullRequest={pullRequest} viewerUsername={viewerUsername} contentWidth={contentWidth} paneWidth={paneWidth} showChecks={showChecks} />
-					<DetailBody pullRequest={pullRequest} contentWidth={contentWidth} bodyLines={bodyLines} loadingIndicator={loadingIndicator} themeId={themeId} />
+					<DetailBody pullRequest={pullRequest} contentWidth={contentWidth} bodyLines={bodyLines} bodyLineLimit={bodyLineLimit} loadingIndicator={loadingIndicator} themeId={themeId} />
 				</>
 			) : (
 				<>

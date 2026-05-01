@@ -1,14 +1,24 @@
 #!/usr/bin/env bun
 
-import { createCliRenderer } from "@opentui/core"
+import { createCliRenderer, createTerminalPalette } from "@opentui/core"
 import { RegistryProvider } from "@effect/atom-react"
 import { createRoot } from "@opentui/react"
-import { App } from "./App.js"
 
 process.env.OTUI_USE_ALTERNATE_SCREEN = "true"
 
 const FOCUS_REPORTING_ENABLE = "\x1b[?1004h"
 const FOCUS_REPORTING_DISABLE = "\x1b[?1004l"
+
+const paletteDetector = createTerminalPalette(process.stdin, process.stdout)
+const [terminalColors, { setSystemThemeColors }, { App }] = await Promise.all([
+	paletteDetector.detect({ timeout: 150 }).catch(() => null).finally(() => paletteDetector.cleanup()),
+	import("./ui/colors.js"),
+	import("./App.js"),
+])
+
+if (terminalColors) {
+	setSystemThemeColors(terminalColors)
+}
 
 const renderer = await createCliRenderer({
 	exitOnCtrlC: false,

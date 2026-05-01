@@ -11,6 +11,10 @@ const appConfig = Config.all({
 		Config.withDefault(200),
 		Config.map(positiveIntOr(200)),
 	),
+	repository: Config.string("GHUI_REPO").pipe(
+		Config.withDefault(""),
+		Config.map((value) => value.trim() || null),
+	),
 })
 
 export const config = Effect.runSync(Effect.gen(function*() {

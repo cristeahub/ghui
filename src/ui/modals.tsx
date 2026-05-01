@@ -51,6 +51,11 @@ export interface ThemeModalState {
 	readonly initialThemeId: ThemeId
 }
 
+export interface CommandPaletteState {
+	readonly query: string
+	readonly selectedIndex: number
+}
+
 export const initialLabelModalState: LabelModalState = {
 	repository: null,
 	query: "",
@@ -94,6 +99,11 @@ export const initialThemeModalState: ThemeModalState = {
 	initialThemeId: "ghui",
 }
 
+export const initialCommandPaletteState: CommandPaletteState = {
+	query: "",
+	selectedIndex: 0,
+}
+
 export type Modal = Data.TaggedEnum<{
 	None: {}
 	Label: LabelModalState
@@ -102,6 +112,7 @@ export type Modal = Data.TaggedEnum<{
 	Comment: CommentModalState
 	CommentThread: CommentThreadModalState
 	Theme: ThemeModalState
+	CommandPalette: CommandPaletteState
 }>
 
 export const Modal = Data.taggedEnum<Modal>()
@@ -117,6 +128,7 @@ export const modalInitialStates = {
 	Comment: initialCommentModalState,
 	CommentThread: initialCommentThreadModalState,
 	Theme: initialThemeModalState,
+	CommandPalette: initialCommandPaletteState,
 } as const satisfies { [Tag in Exclude<ModalTag, "None">]: ModalState<Tag> }
 
 const mergeUnavailableReason = (info: PullRequestMergeInfo | null) => {

@@ -140,12 +140,12 @@ export const FooterHints = ({
 
 	return (
 		<TextLine>
-			<span fg={colors.count}>tab</span>
-			<span fg={colors.muted}> queue  </span>
 			<span fg={colors.count}>/</span>
 			<span fg={colors.muted}> filter  </span>
 			<span fg={colors.count}>t</span>
 			<span fg={colors.muted}> theme  </span>
+			<span fg={colors.count}>ctrl-p</span>
+			<span fg={colors.muted}> cmd  </span>
 			{showFilterClear ? (
 				<>
 					<span fg={colors.count}>esc</span>
@@ -163,12 +163,14 @@ export const FooterHints = ({
 					<span fg={colors.muted}> loading  </span>
 				</>
 			) : null}
-			<span fg={colors.count}>r</span>
-			<span fg={colors.muted}>{hasError ? " retry  " : " refresh  "}</span>
+			{hasError ? (
+				<>
+					<span fg={colors.count}>r</span>
+					<span fg={colors.muted}> retry  </span>
+				</>
+			) : null}
 			{hasSelection ? (
 				<>
-					<span fg={colors.count}>s</span>
-					<span fg={colors.muted}> state  </span>
 					<span fg={colors.count}>d</span>
 					<span fg={colors.muted}> diff  </span>
 					<span fg={colors.count}>l</span>
@@ -187,8 +189,6 @@ export const FooterHints = ({
 					<span fg={colors.muted}> copy  </span>
 				</>
 			) : null}
-			<span fg={colors.count}>q</span>
-			<span fg={colors.muted}> quit</span>
 		</TextLine>
 	)
 }
