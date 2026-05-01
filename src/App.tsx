@@ -6,6 +6,7 @@ import * as AsyncResult from "effect/unstable/reactivity/AsyncResult"
 import * as Atom from "effect/unstable/reactivity/Atom"
 import { useEffect, useMemo, useRef, useState } from "react"
 import { config } from "./config.js"
+import { matchesAction } from "./keybindings.js"
 import { pullRequestQueueLabels, pullRequestQueueModes, type CreatePullRequestCommentInput, type DiffCommentSide, type LoadStatus, type PullRequestItem, type PullRequestLabel, type PullRequestMergeAction, type PullRequestQueueMode, type PullRequestReviewComment } from "./domain.js"
 import { formatShortDate, formatTimestamp } from "./date.js"
 import { availableMergeActions, mergeInfoFromPullRequest } from "./mergeActions.js"
@@ -288,7 +289,6 @@ const copyPullRequestMetadata = async (pullRequest: PullRequestItem) => {
 
 const isShiftG = (key: { readonly name: string; readonly shift?: boolean }) => key.name === "G" || key.name === "g" && key.shift
 
-const isThemeKey = (key: { readonly name: string; readonly ctrl?: boolean; readonly meta?: boolean }) => !key.ctrl && !key.meta && key.name.toLowerCase() === "t"
 
 const nextQueueMode = (mode: PullRequestQueueMode, delta: 1 | -1) => {
 	const index = pullRequestQueueModes.indexOf(mode)
@@ -1758,12 +1758,12 @@ export const App = () => {
 				return
 			}
 
-			if (key.name === "escape" || key.name === "return" || key.name === "enter") {
+			if (matchesAction(key, "back")) {
 				setDiffFullView(false)
 				setDiffCommentMode(false)
 				return
 			}
-			if (key.name === "c" && selectedDiffState?._tag === "Ready") {
+			if (matchesAction(key, "enterCommentMode") && selectedDiffState?._tag === "Ready") {
 				enterDiffCommentMode()
 				return
 			}
@@ -1800,28 +1800,28 @@ export const App = () => {
 				scrollDiffBy(halfPage)
 				return
 			}
-			if (key.name === "v") {
+			if (matchesAction(key, "toggleDiffView")) {
 				setDiffRenderView((current) => current === "unified" ? "split" : "unified")
 				return
 			}
-			if (key.name === "w") {
+			if (matchesAction(key, "toggleDiffWrap")) {
 				setDiffWrapMode((current) => current === "none" ? "word" : "none")
 				return
 			}
-			if (key.name === "r" && selectedPullRequest) {
+			if (matchesAction(key, "refresh") && selectedPullRequest) {
 				loadPullRequestDiff(selectedPullRequest, { force: true, includeComments: true })
 				flashNotice(`Refreshing diff for #${selectedPullRequest.number}`)
 				return
 			}
-			if ((key.name === "]" || key.name === "right" || key.name === "l") && selectedDiffState?._tag === "Ready") {
+			if (matchesAction(key, "jumpFileNext") && selectedDiffState?._tag === "Ready") {
 				jumpDiffFile(1)
 				return
 			}
-			if ((key.name === "[" || key.name === "left" || key.name === "h") && selectedDiffState?._tag === "Ready") {
+			if (matchesAction(key, "jumpFilePrev") && selectedDiffState?._tag === "Ready") {
 				jumpDiffFile(-1)
 				return
 			}
-			if (key.name === "o" && selectedPullRequest) {
+			if (matchesAction(key, "openInBrowser") && selectedPullRequest) {
 				openSelectedPullRequestInBrowser(selectedPullRequest)
 				return
 			}
@@ -1830,37 +1830,36 @@ export const App = () => {
 
 		// Fullscreen detail mode handles its own navigation keys.
 		if (detailFullView) {
-			const plainKey = !key.ctrl && !key.meta && !key.option
-			if (key.name === "escape" || (key.name === "return" || key.name === "enter")) {
+			if (matchesAction(key, "back")) {
 				setDetailFullView(false)
 				setDetailScrollOffset(0)
 				return
 			}
-			if (isThemeKey(key)) {
+			if (matchesAction(key, "openTheme")) {
 				openThemeModal()
 				return
 			}
-			if (plainKey && key.name === "d" && selectedPullRequest) {
+			if (matchesAction(key, "openDiff") && selectedPullRequest) {
 				openDiffView()
 				return
 			}
-			if (plainKey && key.name === "x" && selectedPullRequest?.state === "open") {
+			if (matchesAction(key, "close") && selectedPullRequest?.state === "open") {
 				openCloseModal()
 				return
 			}
-			if (plainKey && key.name === "l" && selectedPullRequest) {
+			if (matchesAction(key, "labels") && selectedPullRequest) {
 				openLabelModal()
 				return
 			}
-			if (plainKey && (key.name === "m" || key.name === "M") && selectedPullRequest) {
+			if (matchesAction(key, "merge") && selectedPullRequest) {
 				openMergeModal()
 				return
 			}
-			if (plainKey && (key.name === "s" || key.name === "S") && selectedPullRequest) {
+			if (matchesAction(key, "toggleDraft") && selectedPullRequest) {
 				toggleSelectedPullRequestDraftStatus()
 				return
 			}
-			if (plainKey && key.name === "r") {
+			if (matchesAction(key, "refresh")) {
 				refreshPullRequests("Refreshed")
 				return
 			}
@@ -1908,11 +1907,11 @@ export const App = () => {
 				setDetailScrollOffset((current) => current + halfPage)
 				return
 			}
-			if (plainKey && key.name === "o" && selectedPullRequest) {
+			if (matchesAction(key, "openInBrowser") && selectedPullRequest) {
 				openSelectedPullRequestInBrowser(selectedPullRequest)
 				return
 			}
-			if (plainKey && key.name === "y" && selectedPullRequest) {
+			if (matchesAction(key, "copyMetadata") && selectedPullRequest) {
 				copySelectedPullRequestMetadata()
 				return
 			}
@@ -1948,28 +1947,28 @@ export const App = () => {
 			}
 		}
 
-		if (key.name === "tab") {
+		if (matchesAction(key, "switchTab")) {
 			switchQueueMode(key.shift ? -1 : 1)
 			return
 		}
 
-		if (isThemeKey(key)) {
+		if (matchesAction(key, "openTheme")) {
 			openThemeModal()
 			return
 		}
 
-		if (key.name === "/") {
+		if (matchesAction(key, "filter")) {
 			setFilterDraft(filterQuery)
 			setFilterMode(true)
 			return
 		}
-		if (key.name === "escape" && filterQuery.length > 0) {
+		if (matchesAction(key, "clearFilter") && filterQuery.length > 0) {
 			setFilterQuery("")
 			setFilterDraft("")
 			setFilterMode(false)
 			return
 		}
-		if (key.name === "r") {
+		if (matchesAction(key, "refresh")) {
 			refreshPullRequests("Refreshed")
 			return
 		}
@@ -2033,36 +2032,36 @@ export const App = () => {
 			() => setSelectedIndex(0),
 			() => setSelectedIndex(visiblePullRequests.length === 0 ? 0 : visiblePullRequests.length - 1),
 		)) return
-		if ((key.name === "return" || key.name === "enter") && !detailFullView) {
+		if (matchesAction(key, "select") && !detailFullView) {
 			setDetailFullView(true)
 			setDetailScrollOffset(0)
 			return
 		}
-		if (key.name === "d" && selectedPullRequest) {
+		if (matchesAction(key, "openDiff") && selectedPullRequest) {
 			openDiffView()
 			return
 		}
-		if (key.name === "x" && selectedPullRequest?.state === "open") {
+		if (matchesAction(key, "close") && selectedPullRequest?.state === "open") {
 			openCloseModal()
 			return
 		}
-		if (key.name === "l" && selectedPullRequest) {
+		if (matchesAction(key, "labels") && selectedPullRequest) {
 			openLabelModal()
 			return
 		}
-		if (key.name === "m" || key.name === "M") {
+		if (matchesAction(key, "merge")) {
 			if (selectedPullRequest) openMergeModal()
 			return
 		}
-		if (key.name === "o" && selectedPullRequest) {
+		if (matchesAction(key, "openInBrowser") && selectedPullRequest) {
 			openSelectedPullRequestInBrowser(selectedPullRequest)
 			return
 		}
-		if ((key.name === "s" || key.name === "S") && selectedPullRequest) {
+		if (matchesAction(key, "toggleDraft") && selectedPullRequest) {
 			toggleSelectedPullRequestDraftStatus()
 			return
 		}
-		if (key.name === "y" && selectedPullRequest) {
+		if (matchesAction(key, "copyMetadata") && selectedPullRequest) {
 			copySelectedPullRequestMetadata()
 			return
 		}
