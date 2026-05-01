@@ -144,8 +144,6 @@ export const FooterHints = ({
 			<span fg={colors.muted}> filter  </span>
 			<span fg={colors.count}>t</span>
 			<span fg={colors.muted}> theme  </span>
-			<span fg={colors.count}>ctrl-p</span>
-			<span fg={colors.muted}> cmd  </span>
 			{showFilterClear ? (
 				<>
 					<span fg={colors.count}>esc</span>
@@ -189,6 +187,8 @@ export const FooterHints = ({
 					<span fg={colors.muted}> copy  </span>
 				</>
 			) : null}
+			<span fg={colors.count}>ctrl-p</span>
+			<span fg={colors.muted}> commands</span>
 		</TextLine>
 	)
 }

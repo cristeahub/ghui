@@ -1,4 +1,4 @@
-export type CommandScope = "Global" | "Queue" | "Pull request" | "Diff" | "Navigation" | "System"
+export type CommandScope = "Global" | "View" | "Pull request" | "Diff" | "Navigation" | "System"
 
 export interface AppCommand {
 	readonly id: string

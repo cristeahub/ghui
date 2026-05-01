@@ -7,12 +7,18 @@ import { checkLabel, repoColor, reviewIcon, statusColor } from "./pullRequests.j
 
 export type PullRequestGroups = Array<[string, PullRequestItem[]]>
 
+export type PullRequestListRow =
+	| { readonly _tag: "title" }
+	| { readonly _tag: "filter" }
+	| { readonly _tag: "message"; readonly text: string; readonly color: string }
+	| { readonly _tag: "group"; readonly repository: string; readonly pullRequests: readonly PullRequestItem[] }
+	| { readonly _tag: "pull-request"; readonly pullRequest: PullRequestItem; readonly groupPullRequests: readonly PullRequestItem[] }
+
 const GROUP_ICON = "◆"
 
-const getRowLayout = (contentWidth: number, numberWidth = 6) => {
+const getRowLayout = (contentWidth: number, numberWidth: number, ageWidth: number) => {
 	const reviewWidth = 1
 	const checkWidth = 6
-	const ageWidth = 4
 	const fixedWidth = reviewWidth + 1 + numberWidth + 1 + checkWidth + ageWidth
 	const titleWidth = Math.max(8, contentWidth - fixedWidth)
 	return { reviewWidth, checkWidth, ageWidth, numberWidth, titleWidth }
@@ -22,6 +28,12 @@ const groupNumberWidth = (pullRequests: readonly PullRequestItem[]) => {
 	if (pullRequests.length === 0) return 4
 	const maxLen = Math.max(...pullRequests.map((pr) => String(pr.number).length))
 	return maxLen + 1
+}
+
+const groupAgeWidth = (pullRequests: readonly PullRequestItem[]) => {
+	if (pullRequests.length === 0) return 4
+	const maxLen = Math.max(...pullRequests.map((pr) => `${daysOpen(pr.createdAt)}d`.length))
+	return Math.max(4, maxLen + 1)
 }
 
 const MatchedCell = ({ text, width, query, align = "left" }: { text: string; width: number; query: string; align?: "left" | "right" }) => {
@@ -47,11 +59,44 @@ const GroupTitle = ({ label, color, filterText }: { label: string; color: string
 	</TextLine>
 )
 
+export const buildPullRequestListRows = ({
+	groups,
+	status,
+	error,
+	filterText,
+	showFilterBar,
+}: {
+	readonly groups: PullRequestGroups
+	readonly status: LoadStatus
+	readonly error: string | null
+	readonly filterText: string
+	readonly showFilterBar: boolean
+}): readonly PullRequestListRow[] => {
+	const itemCount = groups.reduce((count, [, pullRequests]) => count + pullRequests.length, 0)
+	const rows: PullRequestListRow[] = [{ _tag: "title" }]
+	if (showFilterBar) rows.push({ _tag: "filter" })
+	if (status === "loading" && itemCount === 0) rows.push({ _tag: "message", text: "- Loading pull requests...", color: colors.muted })
+	if (status === "error") rows.push({ _tag: "message", text: `- ${error ?? "Could not load pull requests."}`, color: colors.error })
+	if (status === "ready" && itemCount === 0) rows.push({ _tag: "message", text: filterText.length > 0 ? "- No matching pull requests." : "- No open pull requests.", color: colors.muted })
+	for (const [repository, pullRequests] of groups) {
+		rows.push({ _tag: "group", repository, pullRequests })
+		for (const pullRequest of pullRequests) rows.push({ _tag: "pull-request", pullRequest, groupPullRequests: pullRequests })
+	}
+	return rows
+}
+
+export const pullRequestListRowIndex = (rows: readonly PullRequestListRow[], url: string | null) => {
+	if (!url) return null
+	const index = rows.findIndex((row) => row._tag === "pull-request" && row.pullRequest.url === url)
+	return index >= 0 ? index : null
+}
+
 const PullRequestRow = ({
 	pullRequest,
 	selected,
 	contentWidth,
 	numWidth,
+	ageColWidth,
 	filterText,
 	onSelect,
 }: {
@@ -59,6 +104,7 @@ const PullRequestRow = ({
 	selected: boolean
 	contentWidth: number
 	numWidth: number
+	ageColWidth: number
 	filterText: string
 	onSelect: () => void
 }) => {
@@ -67,7 +113,7 @@ const PullRequestRow = ({
 	const isFinal = isClosed || isMerged
 	const checkText = isMerged ? "merged" : isClosed ? "closed" : checkLabel(pullRequest)?.replace(/^checks\s+/, "") ?? ""
 	const ageText = `${daysOpen(pullRequest.createdAt)}d`
-	const { reviewWidth, checkWidth, ageWidth, numberWidth, titleWidth } = getRowLayout(contentWidth, numWidth)
+	const { reviewWidth, checkWidth, ageWidth, numberWidth, titleWidth } = getRowLayout(contentWidth, numWidth, ageColWidth)
 	const rowWidth = reviewWidth + 1 + numberWidth + 1 + titleWidth + checkWidth + ageWidth
 	const fillerWidth = Math.max(0, contentWidth - rowWidth)
 	const indicatorColor = isMerged ? colors.status.passing : isClosed ? colors.muted : pullRequest.autoMergeEnabled ? colors.accent : statusColor(pullRequest.reviewStatus)
@@ -112,39 +158,37 @@ export const PullRequestList = ({
 	isFilterEditing: boolean
 	onSelectPullRequest: (url: string) => void
 }) => {
-	const itemCount = groups.reduce((count, [, pullRequests]) => count + pullRequests.length, 0)
-	const emptyText = filterText.length > 0 ? "- No matching pull requests." : "- No open pull requests."
+	const rows = buildPullRequestListRows({ groups, status, error, filterText, showFilterBar })
 
 	return (
 		<box width={contentWidth} flexDirection="column">
-			<SectionTitle title="PULL REQUESTS" />
-			{showFilterBar ? (
-				<TextLine>
-					<span fg={colors.count}>/</span>
-					<span fg={colors.muted}> </span>
-					<span fg={isFilterEditing ? colors.text : colors.count}>{filterText.length > 0 ? filterText : "type to filter..."}</span>
-				</TextLine>
-			) : null}
-			{status === "loading" && itemCount === 0 ? <PlainLine text="- Loading pull requests..." fg={colors.muted} /> : null}
-			{status === "error" ? <PlainLine text={`- ${error ?? "Could not load pull requests."}`} fg={colors.error} /> : null}
-			{status === "ready" && itemCount === 0 ? <PlainLine text={emptyText} fg={colors.muted} /> : null}
-			{groups.map(([repo, pullRequests]) => {
-				const numWidth = groupNumberWidth(pullRequests)
+			{rows.map((row, index) => {
+				if (row._tag === "title") return <SectionTitle key="title" title="PULL REQUESTS" />
+				if (row._tag === "filter") {
+					return (
+						<TextLine key="filter">
+							<span fg={colors.count}>/</span>
+							<span fg={colors.muted}> </span>
+							<span fg={isFilterEditing ? colors.text : colors.count}>{filterText.length > 0 ? filterText : "type to filter..."}</span>
+						</TextLine>
+					)
+				}
+				if (row._tag === "message") return <PlainLine key={`message-${index}`} text={row.text} fg={row.color} />
+				if (row._tag === "group") return <GroupTitle key={`group-${row.repository}`} label={row.repository} color={repoColor(row.repository)} filterText={filterText} />
+
+				const numWidth = groupNumberWidth(row.groupPullRequests)
+				const ageColWidth = groupAgeWidth(row.groupPullRequests)
 				return (
-					<box key={repo} flexDirection="column">
-						<GroupTitle label={repo} color={repoColor(repo)} filterText={filterText} />
-						{pullRequests.map((pullRequest) => (
-							<PullRequestRow
-								key={pullRequest.url}
-								pullRequest={pullRequest}
-								selected={pullRequest.url === selectedUrl}
-								contentWidth={contentWidth}
-								numWidth={numWidth}
-								filterText={filterText}
-								onSelect={() => onSelectPullRequest(pullRequest.url)}
-							/>
-						))}
-					</box>
+					<PullRequestRow
+						key={row.pullRequest.url}
+						pullRequest={row.pullRequest}
+						selected={row.pullRequest.url === selectedUrl}
+						contentWidth={contentWidth}
+						numWidth={numWidth}
+						ageColWidth={ageColWidth}
+						filterText={filterText}
+						onSelect={() => onSelectPullRequest(row.pullRequest.url)}
+					/>
 				)
 			})}
 		</box>

@@ -1,4 +1,4 @@
-import type { DiffRenderable, ScrollBoxRenderable } from "@opentui/core"
+import type { DiffRenderable, PasteEvent, ScrollBoxRenderable } from "@opentui/core"
 import { RegistryContext, useAtom, useAtomRefresh, useAtomSet, useAtomValue } from "@effect/atom-react"
 import { useKeyboard, useRenderer, useTerminalDimensions } from "@opentui/react"
 import { Cause, Effect, Layer, Schedule } from "effect"
@@ -8,7 +8,7 @@ import { useContext, useEffect, useMemo, useRef, useState } from "react"
 import type { AppCommand } from "./commands.js"
 import { clampCommandIndex, commandEnabled, defineCommand, filterCommands } from "./commands.js"
 import { config } from "./config.js"
-import { pullRequestQueueLabels, pullRequestQueueModes, type CreatePullRequestCommentInput, type DiffCommentSide, type LoadStatus, type PullRequestItem, type PullRequestLabel, type PullRequestMergeAction, type PullRequestQueueMode, type PullRequestReviewComment } from "./domain.js"
+import { pullRequestQueueLabels, pullRequestQueueModes, type CreatePullRequestCommentInput, type DiffCommentSide, type LoadStatus, type PullRequestItem, type PullRequestLabel, type PullRequestMergeAction, type PullRequestQueueMode, type PullRequestReviewComment, type PullRequestUserQueueMode } from "./domain.js"
 import { formatShortDate, formatTimestamp } from "./date.js"
 import { availableMergeActions, mergeInfoFromPullRequest } from "./mergeActions.js"
 import { Observability } from "./observability.js"
@@ -17,30 +17,66 @@ import { Clipboard } from "./services/Clipboard.js"
 import { CommandRunner } from "./services/CommandRunner.js"
 import { GitHubService } from "./services/GitHubService.js"
 import { loadStoredThemeId, saveStoredThemeId } from "./themeStore.js"
-import { colors, filterThemeDefinitions, setActiveTheme, themeDefinitions, type ThemeId } from "./ui/colors.js"
+import { colors, filterThemeDefinitions, mixHex, setActiveTheme, themeDefinitions, type ThemeId } from "./ui/colors.js"
 import { backspace as editorBackspace, deleteForward as editorDeleteForward, deleteToLineEnd, deleteToLineStart, deleteWordBackward, deleteWordForward, insertText, moveLeft as editorMoveLeft, moveLineEnd, moveLineStart, moveRight as editorMoveRight, moveVertically, moveWordBackward, moveWordForward, type CommentEditorValue } from "./ui/commentEditor.js"
 import { buildStackedDiffFiles, diffCommentAnchorKey, diffCommentLocationKey, getStackedDiffCommentAnchors, nearestDiffCommentAnchorIndex, PullRequestDiffState, pullRequestDiffKey, safeDiffFileIndex, scrollTopForVisibleLine, splitPatchFiles, stackedDiffFileAtLine, type DiffCommentAnchor, type DiffView, type DiffWrapMode, type StackedDiffCommentAnchor } from "./ui/diff.js"
 import { DETAIL_BODY_SCROLL_LIMIT, DetailBody, DetailHeader, DetailPlaceholder, DetailsPane, getDetailHeaderHeight, getDetailJunctionRows, getDetailsPaneHeight, getScrollableDetailBodyHeight, LoadingPane, type DetailPlaceholderContent } from "./ui/DetailsPane.js"
 import { FooterHints, initialRetryProgress, RetryProgress } from "./ui/FooterHints.js"
 import { Divider, fitCell, PlainLine, SeparatorColumn } from "./ui/primitives.js"
 import { CommandPalette } from "./ui/CommandPalette.js"
-import { CloseModal, CommentModal, CommentThreadModal, initialCloseModalState, initialCommandPaletteState, initialCommentModalState, initialCommentThreadModalState, initialLabelModalState, initialMergeModalState, initialModal, initialThemeModalState, LabelModal, MergeModal, Modal, ThemeModal, type CloseModalState, type CommandPaletteState, type CommentModalState, type CommentThreadModalState, type LabelModalState, type MergeModalState, type ModalState, type ModalTag, type ThemeModalState } from "./ui/modals.js"
+import { CloseModal, CommentModal, CommentThreadModal, filterLabels, initialCloseModalState, initialCommandPaletteState, initialCommentModalState, initialCommentThreadModalState, initialLabelModalState, initialMergeModalState, initialModal, initialOpenRepositoryModalState, initialThemeModalState, LabelModal, MergeModal, Modal, OpenRepositoryModal, ThemeModal, type CloseModalState, type CommandPaletteState, type CommentModalState, type CommentThreadModalState, type LabelModalState, type MergeModalState, type ModalState, type ModalTag, type OpenRepositoryModalState, type ThemeModalState } from "./ui/modals.js"
 import { groupBy, reviewLabel } from "./ui/pullRequests.js"
 import { PullRequestDiffPane } from "./ui/PullRequestDiffPane.js"
-import { PullRequestList } from "./ui/PullRequestList.js"
+import { buildPullRequestListRows, pullRequestListRowIndex, PullRequestList } from "./ui/PullRequestList.js"
+import { editSingleLineInput, isSingleLineInputKey, printableKeyText, singleLineText } from "./ui/singleLineInput.js"
+
+const parseOptionalPositiveInt = (value: string | undefined, fallback: number | null) => {
+	if (value === undefined) return fallback
+	const parsed = Number.parseInt(value, 10)
+	return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback
+}
+
+const mockPrCount = parseOptionalPositiveInt(process.env.GHUI_MOCK_PR_COUNT, null)
+const githubServiceLayer = mockPrCount !== null
+	? (await import("./services/MockGitHubService.js")).MockGitHubService.layer({ prCount: mockPrCount, repoCount: parseOptionalPositiveInt(process.env.GHUI_MOCK_REPO_COUNT, 4) ?? 4 })
+	: GitHubService.layerNoDeps
 
 const githubRuntime = Atom.runtime(
-	Layer.mergeAll(GitHubService.layerNoDeps, Clipboard.layerNoDeps, BrowserOpener.layerNoDeps).pipe(
+	Layer.mergeAll(githubServiceLayer, Clipboard.layerNoDeps, BrowserOpener.layerNoDeps).pipe(
 		Layer.provide(CommandRunner.layer),
 		Layer.provideMerge(Observability.layer),
 	),
 )
 const initialThemeId = await Effect.runPromise(loadStoredThemeId)
-const activePullRequestQueueModes: readonly PullRequestQueueMode[] = config.repository ? ["repository", ...pullRequestQueueModes] : pullRequestQueueModes
+
+type PullRequestView =
+	| { readonly _tag: "Repository"; readonly repository: string }
+	| { readonly _tag: "Queue"; readonly mode: PullRequestUserQueueMode; readonly repository: string | null }
+
+const initialPullRequestView: PullRequestView = config.repository
+	? { _tag: "Repository", repository: config.repository }
+	: { _tag: "Queue", mode: "authored", repository: null }
+
+const viewMode = (view: PullRequestView): PullRequestQueueMode => view._tag === "Repository" ? "repository" : view.mode
+
+const viewRepository = (view: PullRequestView) => view.repository
+
+const viewCacheKey = (view: PullRequestView) => view._tag === "Repository" ? `repository:${view.repository}` : view.mode
+
+const viewEquals = (left: PullRequestView, right: PullRequestView) =>
+	left._tag === right._tag && viewMode(left) === viewMode(right) && left.repository === right.repository
+
+const activePullRequestViews = (view: PullRequestView): readonly PullRequestView[] => {
+	const repository = viewRepository(view)
+	return [
+		...(repository ? [{ _tag: "Repository" as const, repository }] : []),
+		...pullRequestQueueModes.map((mode) => ({ _tag: "Queue" as const, mode, repository })),
+	]
+}
 
 
 interface PullRequestLoad {
-	readonly queueMode: PullRequestQueueMode
+	readonly view: PullRequestView
 	readonly data: readonly PullRequestItem[]
 	readonly fetchedAt: Date | null
 	readonly detailsFetchedAt: Date | null
@@ -84,6 +120,7 @@ const FOCUSED_IDLE_REFRESH_MS = 5 * 60_000
 const AUTO_REFRESH_JITTER_MS = 10_000
 const DIFF_STICKY_HEADER_LINES = 2
 const LOADING_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"] as const
+const MAX_REPOSITORY_CACHE_ENTRIES = 8
 
 const mergeCachedDetails = (fresh: readonly PullRequestItem[], cached: readonly PullRequestItem[] | undefined) => {
 	if (!cached) return fresh
@@ -107,34 +144,46 @@ const mergeCachedDetails = (fresh: readonly PullRequestItem[], cached: readonly 
 }
 
 const retryProgressAtom = Atom.make<RetryProgress>(initialRetryProgress).pipe(Atom.keepAlive)
-const queueModeAtom = Atom.make<PullRequestQueueMode>(config.repository ? "repository" : "authored").pipe(Atom.keepAlive)
-const queueLoadCacheAtom = Atom.make<Partial<Record<PullRequestQueueMode, PullRequestLoad>>>({}).pipe(Atom.keepAlive)
-const queueSelectionAtom = Atom.make<Partial<Record<PullRequestQueueMode, number>>>({}).pipe(Atom.keepAlive)
+const activeViewAtom = Atom.make<PullRequestView>(initialPullRequestView).pipe(Atom.keepAlive)
+const queueLoadCacheAtom = Atom.make<Partial<Record<string, PullRequestLoad>>>({}).pipe(Atom.keepAlive)
+const queueSelectionAtom = Atom.make<Partial<Record<string, number>>>({}).pipe(Atom.keepAlive)
+const trimQueueLoadCache = (cache: Partial<Record<string, PullRequestLoad>>) => {
+	const repositoryKeys = Object.keys(cache).filter((key) => key.startsWith("repository:"))
+	if (repositoryKeys.length <= MAX_REPOSITORY_CACHE_ENTRIES) return cache
+	const remove = new Set(repositoryKeys.slice(0, repositoryKeys.length - MAX_REPOSITORY_CACHE_ENTRIES))
+	return Object.fromEntries(Object.entries(cache).filter(([key]) => !remove.has(key))) as Partial<Record<string, PullRequestLoad>>
+}
 const pullRequestsAtom = githubRuntime.atom(
 	GitHubService.use((github) =>
 		Effect.gen(function*() {
-			const queueMode = yield* Atom.get(queueModeAtom)
+			const view = yield* Atom.get(activeViewAtom)
+			const queueMode = viewMode(view)
+			const repository = viewRepository(view)
+			const cacheKey = viewCacheKey(view)
 			yield* Atom.set(retryProgressAtom, initialRetryProgress)
-			const data = yield* github.listOpenPullRequests(queueMode).pipe(
-				Effect.tapError(() =>
-					Atom.update(retryProgressAtom, (current) => RetryProgress.Retrying({
-						attempt: Math.min(RetryProgress.$match(current, { Idle: () => 0, Retrying: ({ attempt }) => attempt }) + 1, PR_FETCH_RETRIES),
-						max: PR_FETCH_RETRIES,
-					}))
-				),
-				Effect.retry({ times: PR_FETCH_RETRIES, schedule: Schedule.exponential("300 millis", 2) }),
-				Effect.tapError(() => Atom.set(retryProgressAtom, initialRetryProgress)),
-			)
+			const data = yield* github.listOpenPullRequests(queueMode, repository).pipe(
+					Effect.tapError(() =>
+						Atom.update(retryProgressAtom, (current) => RetryProgress.Retrying({
+							attempt: Math.min(RetryProgress.$match(current, { Idle: () => 0, Retrying: ({ attempt }) => attempt }) + 1, PR_FETCH_RETRIES),
+							max: PR_FETCH_RETRIES,
+						}))
+					),
+					Effect.retry({ times: PR_FETCH_RETRIES, schedule: Schedule.exponential("300 millis", 2) }),
+					Effect.tapError(() => Atom.set(retryProgressAtom, initialRetryProgress)),
+				)
 
 			yield* Atom.set(retryProgressAtom, initialRetryProgress)
 			const cache = yield* Atom.get(queueLoadCacheAtom)
 			const load = {
-				queueMode,
-				data: mergeCachedDetails(data, cache[queueMode]?.data),
+				view,
+				data: mergeCachedDetails(data, cache[cacheKey]?.data),
 				fetchedAt: new Date(),
 				detailsFetchedAt: null,
 			} satisfies PullRequestLoad
-			yield* Atom.set(queueLoadCacheAtom, { ...cache, [queueMode]: load })
+			const nextCache = { ...cache }
+			delete nextCache[cacheKey]
+			nextCache[cacheKey] = load
+			yield* Atom.set(queueLoadCacheAtom, trimQueueLoadCache(nextCache))
 			return load
 		})
 	),
@@ -170,17 +219,18 @@ const usernameAtom = githubRuntime.atom(
 ).pipe(Atom.keepAlive)
 
 const pullRequestLoadAtom = Atom.make((get) => {
-	const queueMode = get(queueModeAtom)
+	const view = get(activeViewAtom)
+	const cacheKey = viewCacheKey(view)
 	const cache = get(queueLoadCacheAtom)
 	const result = get(pullRequestsAtom)
 	const resolved = AsyncResult.getOrElse(result, () => null)
-	return cache[queueMode] ?? (resolved?.queueMode === queueMode ? resolved : null)
+	return cache[cacheKey] ?? (resolved && viewCacheKey(resolved.view) === cacheKey ? resolved : null)
 })
 
 const isLoadingQueueModeAtom = Atom.make((get) => {
-	const queueMode = get(queueModeAtom)
+	const cacheKey = viewCacheKey(get(activeViewAtom))
 	const resolved = AsyncResult.getOrElse(get(pullRequestsAtom), () => null)
-	return resolved !== null && resolved.queueMode !== queueMode
+	return resolved !== null && viewCacheKey(resolved.view) !== cacheKey
 })
 
 const pullRequestStatusAtom = Atom.make((get): LoadStatus => {
@@ -265,8 +315,8 @@ const selectedDiffStateAtom = Atom.make((get) => {
 const listRepoLabelsAtom = githubRuntime.fn<string>()((repository) =>
 	GitHubService.use((github) => github.listRepoLabels(repository))
 )
-const listOpenPullRequestDetailsAtom = githubRuntime.fn<PullRequestQueueMode>()((queueMode) =>
-	GitHubService.use((github) => github.listOpenPullRequestDetails(queueMode))
+const listOpenPullRequestDetailsAtom = githubRuntime.fn<PullRequestView>()((view) =>
+	GitHubService.use((github) => github.listOpenPullRequestDetails(viewMode(view), viewRepository(view)))
 )
 const addPullRequestLabelAtom = githubRuntime.fn<{ readonly repository: string; readonly number: number; readonly label: string }>()((input) =>
 	GitHubService.use((github) => github.addPullRequestLabel(input.repository, input.number, input.label))
@@ -298,9 +348,9 @@ const openInBrowserAtom = githubRuntime.fn<PullRequestItem>()((pullRequest) => B
 
 const centeredOffset = (outer: number, inner: number) => Math.floor((outer - inner) / 2)
 
-const deleteLastWord = (value: string) => value.replace(/\s*\S+\s*$/, "")
-
 const errorMessage = (error: unknown) => error instanceof Error ? error.message : String(error)
+
+const pasteText = (event: PasteEvent) => new TextDecoder().decode(event.bytes)
 
 const pullRequestFilterScore = (pullRequest: PullRequestItem, query: string) => {
 	const normalized = query.trim().toLowerCase()
@@ -333,12 +383,24 @@ const isShiftG = (key: { readonly name: string; readonly shift?: boolean }) => k
 
 const isThemeKey = (key: { readonly name: string; readonly ctrl?: boolean; readonly meta?: boolean }) => !key.ctrl && !key.meta && key.name.toLowerCase() === "t"
 
-const nextQueueMode = (mode: PullRequestQueueMode, delta: 1 | -1) => {
-	const index = activePullRequestQueueModes.indexOf(mode)
-	return activePullRequestQueueModes[(index + delta + activePullRequestQueueModes.length) % activePullRequestQueueModes.length]!
+const nextView = (view: PullRequestView, views: readonly PullRequestView[], delta: 1 | -1) => {
+	const index = Math.max(0, views.findIndex((candidate) => viewEquals(candidate, view)))
+	return views[(index + delta + views.length) % views.length]!
 }
 
-const queueModeLabel = (mode: PullRequestQueueMode) => mode === "repository" && config.repository ? config.repository : pullRequestQueueLabels[mode]
+const viewLabel = (view: PullRequestView) => view._tag === "Repository" ? view.repository : pullRequestQueueLabels[view.mode]
+
+const parseRepositoryInput = (input: string) => {
+	const trimmed = input.trim()
+	const urlMatch = trimmed.match(/^(?:https?:\/\/)?(?:www\.)?github\.com\/([^/\s]+)\/([^/\s?#]+)(?:[/?#].*)?$/i)
+	const shorthandMatch = trimmed.match(/^([^/\s]+)\/([^/\s]+)$/)
+	const match = urlMatch ?? shorthandMatch
+	if (!match) return null
+	const owner = match[1]!
+	const repo = match[2]!.replace(/\.git$/i, "")
+	if (!/^[A-Za-z0-9_.-]+$/.test(owner) || !/^[A-Za-z0-9_.-]+$/.test(repo)) return null
+	return `${owner}/${repo}`
+}
 
 const diffCommentThreadKey = (pullRequest: PullRequestItem, comment: Pick<PullRequestReviewComment, "path" | "side" | "line">) =>
 	`${pullRequestDiffKey(pullRequest)}:${diffCommentLocationKey(comment)}`
@@ -366,28 +428,11 @@ const originalDiffLineColor = (anchor: DiffCommentAnchor): DiffLineColorConfig =
 	return { gutter: colors.diff.lineNumberBg, content: colors.diff.contextBg }
 }
 
-const mixHexColor = (color: string, base: string, amount: number) => {
-	const parse = (hex: string) => {
-		const normalized = hex.replace(/^#/, "")
-		if (!/^[0-9a-fA-F]{6}$/.test(normalized)) return null
-		return {
-			r: Number.parseInt(normalized.slice(0, 2), 16),
-			g: Number.parseInt(normalized.slice(2, 4), 16),
-			b: Number.parseInt(normalized.slice(4, 6), 16),
-		}
-	}
-	const left = parse(color)
-	const right = parse(base)
-	if (!left || !right) return color
-	const channel = (key: "r" | "g" | "b") => Math.round(left[key] * amount + right[key] * (1 - amount)).toString(16).padStart(2, "0")
-	return `#${channel("r")}${channel("g")}${channel("b")}`
-}
-
 const diffCommentGutterColor = (anchor: DiffCommentAnchor, kind: "selected" | "thread") => {
 	const accent = kind === "thread"
 		? colors.status.pending
 		: anchor.side === "RIGHT" ? colors.status.passing : colors.status.failing
-	return mixHexColor(accent, originalDiffLineColor(anchor).gutter, 0.45)
+	return mixHex(originalDiffLineColor(anchor).gutter, accent, 0.45)
 }
 
 const diffSideTargets = (diff: DiffRenderable, anchor: DiffCommentAnchor, view: DiffView) => {
@@ -452,7 +497,7 @@ export const App = () => {
 	const registry = useContext(RegistryContext)
 	const pullRequestResult = useAtomValue(pullRequestsAtom)
 	const refreshPullRequestsAtom = useAtomRefresh(pullRequestsAtom)
-	const [queueMode, setQueueMode] = useAtom(queueModeAtom)
+	const [activeView, setActiveView] = useAtom(activeViewAtom)
 	const setQueueLoadCache = useAtomSet(queueLoadCacheAtom)
 	const setQueueSelection = useAtomSet(queueSelectionAtom)
 	const [selectedIndex, setSelectedIndex] = useAtom(selectedIndexAtom)
@@ -483,6 +528,7 @@ export const App = () => {
 	const commentThreadModalActive = Modal.$is("CommentThread")(activeModal)
 	const themeModalActive = Modal.$is("Theme")(activeModal)
 	const commandPaletteActive = Modal.$is("CommandPalette")(activeModal)
+	const openRepositoryModalActive = Modal.$is("OpenRepository")(activeModal)
 	const labelModal: LabelModalState = labelModalActive ? activeModal : initialLabelModalState
 	const closeModal: CloseModalState = closeModalActive ? activeModal : initialCloseModalState
 	const mergeModal: MergeModalState = mergeModalActive ? activeModal : initialMergeModalState
@@ -490,6 +536,7 @@ export const App = () => {
 	const commentThreadModal: CommentThreadModalState = commentThreadModalActive ? activeModal : initialCommentThreadModalState
 	const themeModal: ThemeModalState = themeModalActive ? activeModal : initialThemeModalState
 	const commandPalette: CommandPaletteState = commandPaletteActive ? activeModal : initialCommandPaletteState
+	const openRepositoryModal: OpenRepositoryModalState = openRepositoryModalActive ? activeModal : initialOpenRepositoryModalState
 	const makeModalSetter = <Tag extends Exclude<ModalTag, "None">>(tag: Tag) =>
 		(next: ModalState<Tag> | ((prev: ModalState<Tag>) => ModalState<Tag>)) => setActiveModal((current) => {
 			const ctor = Modal[tag] as unknown as (args: ModalState<Tag>) => Modal
@@ -507,6 +554,7 @@ export const App = () => {
 	const setCommentThreadModal = makeModalSetter("CommentThread")
 	const setThemeModal = makeModalSetter("Theme")
 	const setCommandPalette = makeModalSetter("CommandPalette")
+	const setOpenRepositoryModal = makeModalSetter("OpenRepository")
 	setActiveTheme(themeId)
 	const themeIdRef = useRef(themeId)
 	const themeModalRef = useRef(themeModal)
@@ -545,7 +593,7 @@ export const App = () => {
 	const dividerJunctionAt = Math.max(1, leftPaneWidth)
 	const leftContentWidth = isWideLayout ? Math.max(24, leftPaneWidth - 2) : Math.max(24, contentWidth - sectionPadding * 2)
 	const rightContentWidth = isWideLayout ? Math.max(24, rightPaneWidth - sectionPadding * 2) : Math.max(24, contentWidth - sectionPadding * 2)
-	const wideDetailLines = Math.max(8, terminalHeight - 8) // fill available vertical space
+	const wideDetailLines = Math.max(8, terminalHeight - 8)
 	const wideBodyHeight = Math.max(8, terminalHeight - 4)
 	const noticeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 	const pendingGTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -562,6 +610,7 @@ export const App = () => {
 	const detailScrollRef = useRef<ScrollBoxRenderable | null>(null)
 	const detailPreviewScrollRef = useRef<ScrollBoxRenderable | null>(null)
 	const diffScrollRef = useRef<ScrollBoxRenderable | null>(null)
+	const prListScrollRef = useRef<ScrollBoxRenderable | null>(null)
 	const diffRenderableRefs = useRef(new Map<number, DiffRenderable>())
 	const diffCommentLineColorsRef = useRef<AppliedDiffLineColorState>({ contextKey: null, entries: [] })
 	const suppressNextDiffCommentScrollRef = useRef(false)
@@ -606,6 +655,17 @@ export const App = () => {
 	const visibleGroups = useAtomValue(visibleGroupsAtom)
 	const visiblePullRequests = useAtomValue(visiblePullRequestsAtom)
 	const selectedPullRequest = useAtomValue(selectedPullRequestAtom)
+	const pullRequestListRows = useMemo(() => buildPullRequestListRows({
+		groups: visibleGroups,
+		status: pullRequestStatus,
+		error: pullRequestError,
+		filterText: visibleFilterText,
+		showFilterBar: filterMode || filterQuery.length > 0,
+	}), [visibleGroups, pullRequestStatus, pullRequestError, visibleFilterText, filterMode, filterQuery])
+	const selectedPullRequestRowIndex = pullRequestListRowIndex(pullRequestListRows, selectedPullRequest?.url ?? null)
+	const selectedRepository = viewRepository(activeView)
+	const activeViews = activePullRequestViews(activeView)
+	const currentQueueCacheKey = viewCacheKey(activeView)
 	const selectedDiffKey = useAtomValue(selectedDiffKeyAtom)
 	const selectedDiffState = useAtomValue(selectedDiffStateAtom)
 	const effectiveDiffRenderView = contentWidth >= 100 ? diffRenderView : "unified"
@@ -635,14 +695,14 @@ export const App = () => {
 		: pullRequestStatus === "loading"
 			? "loading pull requests..."
 			: ""
-	const headerLeft = username ? `GHUI  ${username}  ${queueModeLabel(queueMode)}` : `GHUI  ${queueModeLabel(queueMode)}`
+	const headerLeft = username ? `GHUI  ${username}  ${viewLabel(activeView)}` : `GHUI  ${viewLabel(activeView)}`
 	const headerLine = `${fitCell(headerLeft, Math.max(0, headerFooterWidth - summaryRight.length))}${summaryRight}`
 	const footerNotice = notice ? fitCell(notice, headerFooterWidth) : null
 	const selectPullRequestByUrl = (url: string) => {
 		const index = visiblePullRequests.findIndex((pullRequest) => pullRequest.url === url)
 		if (index >= 0) {
 			setSelectedIndex(index)
-			setQueueSelection((current) => ({ ...current, [queueMode]: index }))
+			setQueueSelection((current) => ({ ...current, [currentQueueCacheKey]: index }))
 		}
 	}
 	const updatePullRequest = (url: string, transform: (pullRequest: PullRequestItem) => PullRequestItem) => {
@@ -661,12 +721,12 @@ export const App = () => {
 		refreshPullRequestsAtom()
 	}
 	refreshPullRequestsRef.current = refreshPullRequests
-	const switchQueueTo = (mode: PullRequestQueueMode) => {
-		if (mode === queueMode) return
+	const switchViewTo = (view: PullRequestView) => {
+		if (viewEquals(view, activeView)) return
 		refreshGenerationRef.current += 1
-		setQueueSelection((current) => ({ ...current, [queueMode]: selectedIndex }))
-		setQueueMode(mode)
-		setSelectedIndex(registry.get(queueSelectionAtom)[mode] ?? 0)
+		setQueueSelection((current) => ({ ...current, [currentQueueCacheKey]: selectedIndex }))
+		setActiveView(view)
+		setSelectedIndex(registry.get(queueSelectionAtom)[viewCacheKey(view)] ?? 0)
 		setRecentlyCompletedPullRequests({})
 		detailHydrationRef.current = null
 		setDetailFullView(false)
@@ -678,7 +738,7 @@ export const App = () => {
 		setRefreshStartedAt(null)
 	}
 	const switchQueueMode = (delta: 1 | -1) => {
-		switchQueueTo(nextQueueMode(queueMode, delta))
+		switchViewTo(nextView(activeView, activeViews, delta))
 	}
 	maybeRefreshPullRequestsRef.current = (minimumAgeMs) => {
 		if (!terminalFocusedRef.current || pullRequestStatusRef.current === "loading") return
@@ -699,9 +759,9 @@ export const App = () => {
 			didMountQueueModeRef.current = true
 			return
 		}
-		if (registry.get(queueLoadCacheAtom)[queueMode]) return
+		if (registry.get(queueLoadCacheAtom)[currentQueueCacheKey]) return
 		refreshPullRequestsAtom()
-	}, [queueMode, refreshPullRequestsAtom, registry])
+	}, [currentQueueCacheKey, refreshPullRequestsAtom, registry])
 
 	useEffect(() => {
 		if (!refreshCompletionMessage || refreshStartedAt === null) return
@@ -759,8 +819,17 @@ export const App = () => {
 	}, [visiblePullRequests.length])
 
 	useEffect(() => {
-		setQueueSelection((current) => current[queueMode] === selectedIndex ? current : { ...current, [queueMode]: selectedIndex })
-	}, [queueMode, selectedIndex])
+		setQueueSelection((current) => current[currentQueueCacheKey] === selectedIndex ? current : { ...current, [currentQueueCacheKey]: selectedIndex })
+	}, [currentQueueCacheKey, selectedIndex])
+
+	useEffect(() => {
+		const scroll = prListScrollRef.current
+		if (!scroll || selectedPullRequestRowIndex === null) return
+		const viewportHeight = scroll.viewport.height
+		if (viewportHeight <= 0) return
+		const nextTop = scrollTopForVisibleLine(scroll.scrollTop, viewportHeight, selectedPullRequestRowIndex, 2)
+		if (nextTop !== scroll.scrollTop) scroll.scrollTo({ x: 0, y: nextTop })
+	}, [selectedPullRequestRowIndex])
 
 	useEffect(() => {
 		setDiffFileIndex(0)
@@ -843,15 +912,15 @@ export const App = () => {
 		if (!pullRequests.some((pullRequest) => pullRequest.state === "open" && !pullRequest.detailLoaded)) return
 		detailHydrationRef.current = fetchedAt
 		const generation = refreshGenerationRef.current
-		void loadPullRequestDetails(queueMode).then((details) => {
+		void loadPullRequestDetails(activeView).then((details) => {
 			if (generation !== refreshGenerationRef.current) return
 			setQueueLoadCache((current) => {
-				const load = current[queueMode]
+				const load = current[currentQueueCacheKey]
 				if (!load) return current
 				const detailsByUrl = new Map(details.map((detail) => [detail.url, detail]))
 				return {
 					...current,
-					[queueMode]: {
+					[currentQueueCacheKey]: {
 						...load,
 						data: load.data.map((pullRequest) => detailsByUrl.get(pullRequest.url) ?? pullRequest),
 						detailsFetchedAt: load.fetchedAt,
@@ -861,7 +930,7 @@ export const App = () => {
 		}).catch((error) => {
 			flashNotice(errorMessage(error))
 		})
-	}, [queueMode, pullRequestStatus, pullRequestLoad?.fetchedAt, pullRequests.length])
+	}, [activeView, currentQueueCacheKey, pullRequestStatus, pullRequestLoad?.fetchedAt, pullRequests.length])
 
 	const detailPlaceholderContent = getDetailPlaceholderContent({
 		status: pullRequestStatus,
@@ -1405,9 +1474,7 @@ export const App = () => {
 
 	const toggleLabelAtIndex = () => {
 		if (!selectedPullRequest) return
-		const filtered = labelModal.availableLabels.filter((label) =>
-			labelModal.query.length === 0 || label.name.toLowerCase().includes(labelModal.query.toLowerCase()),
-		)
+		const filtered = filterLabels(labelModal.availableLabels, labelModal.query)
 		const label = filtered[labelModal.selectedIndex]
 		if (!label) return
 
@@ -1442,6 +1509,61 @@ export const App = () => {
 	const openCommandPalette = () => {
 		setCommandPalette(initialCommandPaletteState)
 	}
+	const openRepositoryPicker = () => {
+		setOpenRepositoryModal({ query: selectedRepository ?? "", error: null })
+	}
+	const openRepositoryFromInput = () => {
+		const repository = parseRepositoryInput(openRepositoryModal.query)
+		if (!repository) {
+			setOpenRepositoryModal((current) => ({ ...current, error: "Enter a repository as owner/name or a GitHub URL." }))
+			return
+		}
+		closeActiveModal()
+		switchViewTo({ _tag: "Repository", repository })
+		flashNotice(`Opened ${repository}`)
+	}
+	const insertPastedText = (text: string) => {
+		if (text.length === 0) return false
+		if (commandPaletteActive) {
+			setCommandPalette((current) => ({ ...current, query: current.query + singleLineText(text), selectedIndex: 0 }))
+			return true
+		}
+		if (openRepositoryModalActive) {
+			setOpenRepositoryModal((current) => ({ ...current, query: current.query + singleLineText(text), error: null }))
+			return true
+		}
+		if (themeModalActive && themeModal.filterMode) {
+			editThemeQuery((query) => query + singleLineText(text))
+			return true
+		}
+		if (commentModalActive) {
+			editComment((state) => insertText(state, text.replace(/\r\n?/g, "\n")))
+			return true
+		}
+		if (labelModalActive) {
+			setLabelModal((current) => ({ ...current, query: current.query + singleLineText(text), selectedIndex: 0 }))
+			return true
+		}
+		if (filterMode) {
+			setFilterDraft((current) => current + singleLineText(text))
+			return true
+		}
+		return false
+	}
+
+	useEffect(() => {
+		const handlePaste = (event: PasteEvent) => {
+			if (insertPastedText(pasteText(event))) event.preventDefault()
+		}
+		const keyInput = renderer.keyInput as unknown as {
+			on: (event: "paste", handler: (event: PasteEvent) => void) => void
+			off: (event: "paste", handler: (event: PasteEvent) => void) => void
+		}
+		keyInput.on("paste", handlePaste)
+		return () => {
+			keyInput.off("paste", handlePaste)
+		}
+	}, [renderer, commandPaletteActive, openRepositoryModalActive, themeModalActive, themeModal.filterMode, commentModalActive, labelModalActive, filterMode])
 
 	const selectedPullRequestLabel = selectedPullRequest ? `#${selectedPullRequest.number} ${selectedPullRequest.repository}` : "No pull request selected"
 	const noPullRequestReason = selectedPullRequest ? null : "Select a pull request first."
@@ -1504,29 +1626,21 @@ export const App = () => {
 			run: openThemeModal,
 		}),
 		defineCommand({
-			id: "queue.next",
-			title: "Next queue",
-			scope: "Queue",
-			subtitle: `Current queue: ${queueModeLabel(queueMode)}`,
-			shortcut: "tab",
-			run: () => switchQueueMode(1),
+			id: "repository.open",
+			title: "Open repository...",
+			scope: "View",
+			subtitle: selectedRepository ? `Current repository: ${selectedRepository}` : "Enter owner/name or a GitHub URL",
+			keywords: ["repo", "repository", "owner", "github"],
+			run: openRepositoryPicker,
 		}),
-		defineCommand({
-			id: "queue.previous",
-			title: "Previous queue",
-			scope: "Queue",
-			subtitle: `Current queue: ${queueModeLabel(queueMode)}`,
-			shortcut: "shift-tab",
-			run: () => switchQueueMode(-1),
-		}),
-		...activePullRequestQueueModes.map((mode) => defineCommand({
-			id: `queue.${mode}`,
-			title: `Switch to ${queueModeLabel(mode)}`,
-			scope: "Queue" as const,
-			subtitle: mode === queueMode ? "Already showing this queue" : "Move to this pull request queue",
-			keywords: [mode, queueModeLabel(mode)],
-			disabledReason: mode === queueMode ? "Already showing this queue." : null,
-			run: () => switchQueueTo(mode),
+		...activeViews.map((view) => defineCommand({
+			id: view._tag === "Repository" ? "view.repository" : `view.${view.mode}`,
+			title: `Show ${viewLabel(view)} view`,
+			scope: "View" as const,
+			subtitle: viewEquals(view, activeView) ? "Already showing this view" : "Switch pull request view",
+			keywords: [viewMode(view), viewLabel(view), "queue", "view"],
+			disabledReason: viewEquals(view, activeView) ? "Already showing this view." : null,
+			run: () => switchViewTo(view),
 		})),
 		defineCommand({
 			id: "detail.open",
@@ -1758,16 +1872,31 @@ export const App = () => {
 				})
 				return
 			}
-			if (key.ctrl && key.name === "u") {
-				setCommandPalette((current) => current.query.length === 0 && current.selectedIndex === 0 ? current : { ...current, query: "", selectedIndex: 0 })
+			if (isSingleLineInputKey(key)) {
+				setCommandPalette((current) => {
+					const query = editSingleLineInput(current.query, key) ?? current.query
+					return current.query === query && current.selectedIndex === 0 ? current : { ...current, query, selectedIndex: 0 }
+				})
 				return
 			}
-			if (key.name === "backspace") {
-				setCommandPalette((current) => current.query.length === 0 && current.selectedIndex === 0 ? current : { ...current, query: current.query.slice(0, -1), selectedIndex: 0 })
+			return
+		}
+
+		if (openRepositoryModalActive) {
+			if (key.name === "escape" || key.ctrl && key.name === "c") {
+				closeActiveModal()
 				return
 			}
-			if (!key.ctrl && !key.meta && key.sequence.length === 1) {
-				setCommandPalette((current) => ({ ...current, query: current.query + key.sequence, selectedIndex: 0 }))
+			if (key.name === "return" || key.name === "enter") {
+				openRepositoryFromInput()
+				return
+			}
+			if (isSingleLineInputKey(key)) {
+				setOpenRepositoryModal((current) => ({
+					...current,
+					query: editSingleLineInput(current.query, key) ?? current.query,
+					error: null,
+				}))
 				return
 			}
 			return
@@ -1817,16 +1946,8 @@ export const App = () => {
 				moveThemeSelection(1)
 				return
 			}
-			if (themeModal.filterMode && key.name === "backspace") {
-				editThemeQuery((query) => query.slice(0, -1))
-				return
-			}
-			if (themeModal.filterMode && key.ctrl && key.name === "u") {
-				updateThemeQuery("")
-				return
-			}
-			if (themeModal.filterMode && !key.ctrl && !key.meta && key.sequence.length === 1 && key.name !== "return") {
-				editThemeQuery((query) => query + key.sequence)
+			if (themeModal.filterMode && isSingleLineInputKey(key)) {
+				editThemeQuery((query) => editSingleLineInput(query, key) ?? query)
 				return
 			}
 			return
@@ -1925,8 +2046,9 @@ export const App = () => {
 				submitDiffComment()
 				return
 			}
-			if (!key.ctrl && !key.meta && key.sequence.length === 1) {
-				editComment((state) => insertText(state, key.sequence))
+			const text = printableKeyText(key)
+			if (text) {
+				editComment((state) => insertText(state, text))
 				return
 			}
 			return
@@ -1999,7 +2121,6 @@ export const App = () => {
 			return
 		}
 
-		// Label modal takes priority over everything else
 		if (labelModalActive) {
 			if (key.name === "escape") {
 				closeActiveModal()
@@ -2017,31 +2138,17 @@ export const App = () => {
 				return
 			}
 			if (key.name === "down" || key.name === "j") {
-				const filtered = labelModal.availableLabels.filter((label) =>
-					labelModal.query.length === 0 || label.name.toLowerCase().includes(labelModal.query.toLowerCase()),
-				)
+				const filtered = filterLabels(labelModal.availableLabels, labelModal.query)
 				setLabelModal((current) => ({
 					...current,
 					selectedIndex: Math.min(Math.max(0, filtered.length - 1), current.selectedIndex + 1),
 				}))
 				return
 			}
-			if (key.name === "backspace") {
+			if (isSingleLineInputKey(key)) {
 				setLabelModal((current) => ({
 					...current,
-					query: current.query.slice(0, -1),
-					selectedIndex: 0,
-				}))
-				return
-			}
-			if (key.ctrl && key.name === "u") {
-				setLabelModal((current) => ({ ...current, query: "", selectedIndex: 0 }))
-				return
-			}
-			if (!key.ctrl && !key.meta && key.sequence.length === 1) {
-				setLabelModal((current) => ({
-					...current,
-					query: current.query + key.sequence,
+					query: editSingleLineInput(current.query, key) ?? current.query,
 					selectedIndex: 0,
 				}))
 				return
@@ -2179,7 +2286,6 @@ export const App = () => {
 			return
 		}
 
-		// Fullscreen detail mode handles its own navigation keys.
 		if (detailFullView) {
 			const plainKey = !key.ctrl && !key.meta && !key.option
 			if (key.name === "escape" || (key.name === "return" || key.name === "enter")) {
@@ -2280,26 +2386,14 @@ export const App = () => {
 				setFilterMode(false)
 				return
 			}
-			if (key.ctrl && key.name === "u") {
-				setFilterDraft("")
-				return
-			}
-			if (key.ctrl && key.name === "w") {
-				setFilterDraft((current) => deleteLastWord(current))
-				return
-			}
-			if (key.name === "backspace") {
-				setFilterDraft((current) => current.slice(0, -1))
-				return
-			}
-			if (!key.ctrl && !key.meta && key.sequence.length === 1 && key.name !== "return") {
-				setFilterDraft((current) => current + key.sequence)
+			if (isSingleLineInputKey(key)) {
+				setFilterDraft((current) => editSingleLineInput(current, key) ?? current)
 				return
 			}
 		}
 
 		if (key.name === "tab") {
-			runCommandById(key.shift ? "queue.previous" : "queue.next")
+			switchQueueMode(key.shift ? -1 : 1)
 			return
 		}
 
@@ -2468,33 +2562,49 @@ export const App = () => {
 	const labelModalHeight = Math.min(20, terminalHeight - 4)
 	const labelModalLeft = centeredOffset(contentWidth, labelModalWidth)
 	const labelModalTop = centeredOffset(terminalHeight, labelModalHeight)
-	const closeModalWidth = Math.min(68, Math.max(46, contentWidth - 12))
-	const closeModalHeight = Math.min(12, terminalHeight - 4)
-	const closeModalLeft = centeredOffset(contentWidth, closeModalWidth)
-	const closeModalTop = centeredOffset(terminalHeight, closeModalHeight)
-	const commentModalWidth = Math.min(76, Math.max(46, contentWidth - 8))
-	const commentModalHeight = Math.min(16, terminalHeight - 4)
-	const commentModalLeft = centeredOffset(contentWidth, commentModalWidth)
-	const commentModalTop = centeredOffset(terminalHeight, commentModalHeight)
-	const commentThreadModalWidth = Math.min(86, Math.max(50, contentWidth - 8))
-	const commentThreadModalHeight = Math.min(22, terminalHeight - 4)
-	const commentThreadModalLeft = centeredOffset(contentWidth, commentThreadModalWidth)
-	const commentThreadModalTop = centeredOffset(terminalHeight, commentThreadModalHeight)
+	const sizedModal = (minW: number, maxW: number, padX: number, maxH: number) => {
+		const width = Math.min(maxW, Math.max(minW, contentWidth - padX))
+		const height = Math.min(maxH, terminalHeight - 4)
+		return { width, height, left: centeredOffset(contentWidth, width), top: centeredOffset(terminalHeight, height) }
+	}
+	const closeLayout = sizedModal(46, 68, 12, 12)
+	const closeModalWidth = closeLayout.width
+	const closeModalHeight = closeLayout.height
+	const closeModalLeft = closeLayout.left
+	const closeModalTop = closeLayout.top
+	const commentLayout = sizedModal(46, 76, 8, 16)
+	const commentModalWidth = commentLayout.width
+	const commentModalHeight = commentLayout.height
+	const commentModalLeft = commentLayout.left
+	const commentModalTop = commentLayout.top
+	const commentThreadLayout = sizedModal(50, 86, 8, 22)
+	const commentThreadModalWidth = commentThreadLayout.width
+	const commentThreadModalHeight = commentThreadLayout.height
+	const commentThreadModalLeft = commentThreadLayout.left
+	const commentThreadModalTop = commentThreadLayout.top
 	const commentAnchorLabel = selectedDiffCommentAnchor
 		? `${selectedDiffCommentAnchor.path}:${selectedDiffCommentAnchor.line} ${selectedDiffCommentAnchor.side === "RIGHT" ? "right" : "left"}`
 		: "No diff line selected"
-	const mergeModalWidth = Math.min(68, Math.max(46, contentWidth - 12))
-	const mergeModalHeight = Math.min(16, terminalHeight - 4)
-	const mergeModalLeft = centeredOffset(contentWidth, mergeModalWidth)
-	const mergeModalTop = centeredOffset(terminalHeight, mergeModalHeight)
-	const themeModalWidth = Math.min(58, Math.max(38, contentWidth - 12))
-	const themeModalHeight = Math.min(16, terminalHeight - 4)
-	const themeModalLeft = centeredOffset(contentWidth, themeModalWidth)
-	const themeModalTop = centeredOffset(terminalHeight, themeModalHeight)
-	const commandPaletteWidth = Math.min(88, Math.max(50, contentWidth - 8))
-	const commandPaletteHeight = Math.min(24, terminalHeight - 4)
-	const commandPaletteLeft = centeredOffset(contentWidth, commandPaletteWidth)
-	const commandPaletteTop = centeredOffset(terminalHeight, commandPaletteHeight)
+	const mergeLayout = sizedModal(46, 68, 12, 16)
+	const mergeModalWidth = mergeLayout.width
+	const mergeModalHeight = mergeLayout.height
+	const mergeModalLeft = mergeLayout.left
+	const mergeModalTop = mergeLayout.top
+	const themeLayout = sizedModal(38, 58, 12, 16)
+	const themeModalWidth = themeLayout.width
+	const themeModalHeight = themeLayout.height
+	const themeModalLeft = themeLayout.left
+	const themeModalTop = themeLayout.top
+	const openRepositoryLayout = sizedModal(46, 76, 8, 8)
+	const openRepositoryModalWidth = openRepositoryLayout.width
+	const openRepositoryModalHeight = openRepositoryLayout.height
+	const openRepositoryModalLeft = openRepositoryLayout.left
+	const openRepositoryModalTop = openRepositoryLayout.top
+	const commandPaletteLayout = sizedModal(50, 88, 8, 24)
+	const commandPaletteWidth = commandPaletteLayout.width
+	const commandPaletteHeight = commandPaletteLayout.height
+	const commandPaletteLeft = commandPaletteLayout.left
+	const commandPaletteTop = commandPaletteLayout.top
 
 	return (
 		<box width={terminalWidth} height={terminalHeight} flexDirection="column" backgroundColor={colors.background}>
@@ -2546,7 +2656,7 @@ export const App = () => {
 			) : isWideLayout ? (
 			<box key="wide-main" flexGrow={1} flexDirection="row">
 					<box width={leftPaneWidth} height={wideBodyHeight} flexDirection="column">
-						<scrollbox height={wideBodyHeight} flexGrow={0}>
+						<scrollbox ref={prListScrollRef} focusable={false} height={wideBodyHeight} flexGrow={0}>
 							<box paddingLeft={sectionPadding} paddingRight={0}>
 								<PullRequestList key={`wide-${leftContentWidth}`} {...prListProps} contentWidth={leftContentWidth} />
 							</box>
@@ -2586,7 +2696,7 @@ export const App = () => {
 					<DetailsPane pullRequest={selectedPullRequest} viewerUsername={username} contentWidth={fullscreenContentWidth} paneWidth={contentWidth} placeholderContent={detailPlaceholderContent} loadingIndicator={loadingIndicator} themeId={themeId} />
 					<Divider width={contentWidth} />
 					<box flexGrow={1} flexDirection="column">
-						<scrollbox flexGrow={1}>
+						<scrollbox ref={prListScrollRef} focusable={false} flexGrow={1}>
 							<box paddingLeft={sectionPadding} paddingRight={sectionPadding}>
 								<PullRequestList key={`narrow-${fullscreenContentWidth}`} {...prListProps} contentWidth={fullscreenContentWidth} />
 							</box>
@@ -2679,6 +2789,15 @@ export const App = () => {
 					modalHeight={themeModalHeight}
 					offsetLeft={themeModalLeft}
 					offsetTop={themeModalTop}
+				/>
+			) : null}
+			{openRepositoryModalActive ? (
+				<OpenRepositoryModal
+					state={openRepositoryModal}
+					modalWidth={openRepositoryModalWidth}
+					modalHeight={openRepositoryModalHeight}
+					offsetLeft={openRepositoryModalLeft}
+					offsetTop={openRepositoryModalTop}
 				/>
 			) : null}
 			{commandPaletteActive ? (

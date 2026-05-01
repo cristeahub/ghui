@@ -8,7 +8,8 @@ export type PullRequestState = Schema.Schema.Type<typeof PullRequestState>
 
 export const PullRequestQueueMode = Schema.Literals(["repository", "authored", "review", "assigned", "mentioned"])
 export type PullRequestQueueMode = Schema.Schema.Type<typeof PullRequestQueueMode>
-export const pullRequestQueueModes = PullRequestQueueMode.literals.filter((mode) => mode !== "repository")
+export type PullRequestUserQueueMode = Exclude<PullRequestQueueMode, "repository">
+export const pullRequestQueueModes = PullRequestQueueMode.literals.filter((mode): mode is PullRequestUserQueueMode => mode !== "repository")
 
 export const pullRequestQueueLabels = {
 	repository: "repository",

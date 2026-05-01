@@ -3,22 +3,55 @@ import { useEffect, useMemo, useState } from "react"
 import type { AppCommand } from "../commands.js"
 import { clampCommandIndex } from "../commands.js"
 import { colors } from "./colors.js"
-import { centerCell, Divider, fitCell, ModalFrame, PlainLine, TextLine, trimCell } from "./primitives.js"
-
-const scopeOrder: readonly AppCommand["scope"][] = ["Global", "Queue", "Pull request", "Diff", "Navigation", "System"]
+import { scrollTopForVisibleLine } from "./diff.js"
+import { centerCell, Divider, Filler, fitCell, ModalFrame, PlainLine, TextLine, trimCell } from "./primitives.js"
 
 const scopeLabels = {
 	Global: "App",
-	Queue: "Queue",
+	View: "View",
 	"Pull request": "Pull Request",
 	Diff: "Diff",
 	Navigation: "Navigation",
 	System: "System",
 } as const satisfies Record<AppCommand["scope"], string>
 
-type CommandPaletteRow =
+export type CommandPaletteRow =
 	| { readonly _tag: "section"; readonly scope: AppCommand["scope"] }
 	| { readonly _tag: "command"; readonly command: AppCommand; readonly commandIndex: number }
+
+export const buildCommandPaletteRows = (commands: readonly AppCommand[]): readonly CommandPaletteRow[] => {
+	const rows: CommandPaletteRow[] = []
+	let previousScope: AppCommand["scope"] | null = null
+	for (let commandIndex = 0; commandIndex < commands.length; commandIndex++) {
+		const command = commands[commandIndex]!
+		if (command.scope !== previousScope) {
+			rows.push({ _tag: "section", scope: command.scope })
+			previousScope = command.scope
+		}
+		rows.push({ _tag: "command", command, commandIndex })
+	}
+	return rows
+}
+
+export const commandPaletteSelectedRowIndex = (rows: readonly CommandPaletteRow[], selectedCommandIndex: number) =>
+	Math.max(0, rows.findIndex((row) => row._tag === "command" && row.commandIndex === selectedCommandIndex))
+
+export const commandPaletteScrollTop = ({
+	current,
+	rowsLength,
+	listHeight,
+	selectedRowIndex,
+}: {
+	readonly current: number
+	readonly rowsLength: number
+	readonly listHeight: number
+	readonly selectedRowIndex: number
+}) => {
+	if (rowsLength <= listHeight) return 0
+	const maxScrollTop = Math.max(0, rowsLength - listHeight)
+	const clampScrollTop = (value: number) => Math.max(0, Math.min(value, maxScrollTop))
+	return clampScrollTop(scrollTopForVisibleLine(current, listHeight, selectedRowIndex, 0))
+}
 
 export const CommandPalette = ({
 	commands,
@@ -39,16 +72,12 @@ export const CommandPalette = ({
 }) => {
 	const innerWidth = Math.max(16, modalWidth - 2)
 	const contentWidth = Math.max(14, innerWidth - 2)
-	const rowWidth = contentWidth
+	const rowWidth = innerWidth
 	const listHeight = Math.max(1, modalHeight - 7)
 	const clampedIndex = clampCommandIndex(selectedIndex, commands)
-	const selectedCommand = commands[clampedIndex] ?? null
 	const [scrollTop, setScrollTop] = useState(0)
-	const rows = useMemo(() => scopeOrder.flatMap((scope): readonly CommandPaletteRow[] => {
-		const scoped = commands.flatMap((command, commandIndex) => command.scope === scope ? [{ _tag: "command" as const, command, commandIndex }] : [])
-		return scoped.length === 0 ? [] : [{ _tag: "section" as const, scope }, ...scoped]
-	}), [commands])
-	const selectedRowIndex = Math.max(0, rows.findIndex((row) => row._tag === "command" && row.commandIndex === clampedIndex))
+	const rows = useMemo(() => buildCommandPaletteRows(commands), [commands])
+	const selectedRowIndex = commandPaletteSelectedRowIndex(rows, clampedIndex)
 	const visibleRows = rows.slice(scrollTop, scrollTop + listHeight)
 	const bottomPaddingRows = Math.max(0, listHeight - visibleRows.length)
 	const title = "Command Palette"
@@ -58,21 +87,12 @@ export const CommandPalette = ({
 	const queryWidth = Math.max(1, contentWidth - 2)
 	const emptyTopRows = Math.max(0, Math.floor((listHeight - 1) / 2))
 	const emptyBottomRows = Math.max(0, listHeight - emptyTopRows - 1)
-	const detailText = selectedCommand
-		? selectedCommand.subtitle ?? selectedCommand.scope
-		: "No matching command"
-
 	useEffect(() => {
-		setScrollTop((current) => {
-			if (rows.length <= listHeight) return 0
-			if (selectedRowIndex < current) return selectedRowIndex
-			if (selectedRowIndex >= current + listHeight) return selectedRowIndex - listHeight + 1
-			return Math.min(current, Math.max(0, rows.length - listHeight))
-		})
+		setScrollTop((current) => commandPaletteScrollTop({ current, rowsLength: rows.length, listHeight, selectedRowIndex }))
 	}, [listHeight, rows.length, selectedRowIndex])
 
 	return (
-		<ModalFrame left={offsetLeft} top={offsetTop} width={modalWidth} height={modalHeight} junctionRows={[2]}>
+		<ModalFrame left={offsetLeft} top={offsetTop} width={modalWidth} height={modalHeight} junctionRows={[2, modalHeight - 4]}>
 			<box height={1} paddingLeft={1} paddingRight={1}>
 				<TextLine>
 					<span fg={colors.accent} attributes={TextAttributes.BOLD}>{title}</span>
@@ -87,26 +107,27 @@ export const CommandPalette = ({
 				</TextLine>
 			</box>
 			<Divider width={innerWidth} />
-			<box height={listHeight} flexDirection="column" paddingLeft={1} paddingRight={1}>
+			<box height={listHeight} flexDirection="column">
 				{rows.length === 0 ? (
 					<>
-						{Array.from({ length: emptyTopRows }, (_, index) => <box key={`top-${index}`} height={1} />)}
+						<Filler rows={emptyTopRows} prefix="top" />
 						<PlainLine text={centerCell("No matching command", rowWidth)} fg={colors.muted} />
-						{Array.from({ length: emptyBottomRows }, (_, index) => <box key={`bottom-${index}`} height={1} />)}
+						<Filler rows={emptyBottomRows} prefix="bottom" />
 					</>
 				) : (
 					<>
 						{visibleRows.map((row, index) => {
 							const rowIndex = scrollTop + index
 							if (row._tag === "section") {
-								return <PlainLine key={`section-${row.scope}-${rowIndex}`} text={fitCell(scopeLabels[row.scope], rowWidth)} fg={colors.accent} bold />
+								return <PlainLine key={`section-${row.scope}-${rowIndex}`} text={fitCell(` ${scopeLabels[row.scope]}`, rowWidth)} fg={colors.accent} bold />
 							}
 
 							const { command, commandIndex } = row
 							const isSelected = commandIndex === clampedIndex
 							const shortcut = command.shortcut ? trimCell(command.shortcut, 16) : ""
 							const rightWidth = shortcut.length === 0 ? 0 : Math.min(18, Math.max(8, shortcut.length + 1))
-							const titleWidth = Math.max(8, rowWidth - rightWidth - 4)
+							const trailingPadding = shortcut.length === 0 ? 0 : 1
+							const titleWidth = Math.max(8, rowWidth - rightWidth - trailingPadding - 2)
 
 							return (
 								<box key={command.id} height={1}>
@@ -115,19 +136,18 @@ export const CommandPalette = ({
 										<span> </span>
 										{isSelected ? <span attributes={TextAttributes.BOLD}>{fitCell(command.title, titleWidth)}</span> : <span>{fitCell(command.title, titleWidth)}</span>}
 										{rightWidth > 0 ? <span fg={colors.muted}>{fitCell(shortcut, rightWidth, "right")}</span> : null}
+										{trailingPadding > 0 ? <span> </span> : null}
 									</TextLine>
 								</box>
 							)
 						})}
-						{Array.from({ length: bottomPaddingRows }, (_, index) => <box key={`pad-${index}`} height={1} />)}
+						<Filler rows={bottomPaddingRows} prefix="pad" />
 					</>
 				)}
 			</box>
+			<Divider width={innerWidth} />
 			<box height={1} paddingLeft={1} paddingRight={1}>
-				<PlainLine text={fitCell(detailText, contentWidth)} fg={colors.muted} />
-			</box>
-			<box height={1} paddingLeft={1} paddingRight={1}>
-				<PlainLine text="up/down select  enter run  ctrl-u clear  esc close" fg={colors.muted} />
+				<PlainLine text="up/down select  enter run  ctrl-u clear  ctrl-w word  esc close" fg={colors.muted} />
 			</box>
 		</ModalFrame>
 	)

@@ -89,7 +89,7 @@ const luminance = (hex: string) => {
 const rgbToHex = ({ r, g, b }: { readonly r: number; readonly g: number; readonly b: number }) =>
 	`#${[r, g, b].map((component) => Math.max(0, Math.min(255, Math.round(component))).toString(16).padStart(2, "0")).join("")}`
 
-const mixHex = (base: string, overlay: string, amount: number) => {
+export const mixHex = (base: string, overlay: string, amount: number) => {
 	const from = hexToRgb(base)
 	const to = hexToRgb(overlay)
 	return rgbToHex({
@@ -204,10 +204,11 @@ const makeSystemColors = (terminal?: TerminalThemeColors): ColorPalette => {
 	const yellow = readableHex(palette[3], "#c4a000")
 	const blue = readableHex(palette[4], "#3465a4")
 	const magenta = readableHex(palette[5], "#75507b")
-	const cyan = readableHex(palette[6], "#06989a")
 	const brightBlack = readableHex(palette[8], mutedTextColor(terminalBackground))
 	const brightGreen = readableHex(palette[10], green)
+	const brightBlue = readableHex(palette[12], blue)
 	const brightMagenta = readableHex(palette[13], magenta)
+	const primary = brightBlue
 	const panel = grays[2] ?? mixHex(terminalBackground, text, isDark ? 0.07 : 0.08)
 	const element = grays[3] ?? mixHex(terminalBackground, text, isDark ? 0.1 : 0.1)
 	const border = grays[7] ?? mixHex(terminalBackground, text, isDark ? 0.24 : 0.24)
@@ -220,24 +221,24 @@ const makeSystemColors = (terminal?: TerminalThemeColors): ColorPalette => {
 		text,
 		muted: mutedTextColor(terminalBackground),
 		separator: border,
-		accent: cyan,
+		accent: primary,
 		inlineCode: brightGreen,
 		error: red,
-		selectedBg: cyan,
-		selectedText: contrastText(cyan),
-		count: cyan,
+		selectedBg: primary,
+		selectedText: contrastText(primary),
+		count: primary,
 		status: {
 			draft: yellow,
 			approved: green,
 			changes: red,
-			review: cyan,
+			review: primary,
 			none: brightBlack,
 			passing: green,
 			pending: yellow,
 			failing: red,
 		},
 		repos: {
-			opencode: cyan,
+			opencode: primary,
 			"effect-smol": green,
 			"opencode-console": brightMagenta,
 			opencontrol: yellow,

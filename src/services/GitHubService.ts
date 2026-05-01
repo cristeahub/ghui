@@ -351,9 +351,9 @@ const parsePullRequest = (item: RawPullRequestNode): PullRequestItem => {
 	}
 }
 
-const searchQuery = (mode: PullRequestQueueMode, author: string) => {
+const searchQuery = (mode: PullRequestQueueMode, author: string, repository: string | null) => {
 	const sort = mode === "repository" ? "sort:updated-desc" : "sort:created-desc"
-	return `${pullRequestQueueSearchQualifier(mode, author, config.repository)} is:pr is:open ${sort}`
+	return `${pullRequestQueueSearchQualifier(mode, author, repository)} is:pr is:open ${sort}`
 }
 
 const sortNewestFirst = (pullRequests: readonly PullRequestItem[]) =>
@@ -431,8 +431,8 @@ const normalizeMergeable = (value: string): Mergeable =>
 	MERGEABLE_BY_RAW[value] ?? "unknown"
 
 export class GitHubService extends Context.Service<GitHubService, {
-	readonly listOpenPullRequests: (mode: PullRequestQueueMode) => Effect.Effect<readonly PullRequestItem[], GitHubError>
-	readonly listOpenPullRequestDetails: (mode: PullRequestQueueMode) => Effect.Effect<readonly PullRequestItem[], GitHubError>
+	readonly listOpenPullRequests: (mode: PullRequestQueueMode, repository: string | null) => Effect.Effect<readonly PullRequestItem[], GitHubError>
+	readonly listOpenPullRequestDetails: (mode: PullRequestQueueMode, repository: string | null) => Effect.Effect<readonly PullRequestItem[], GitHubError>
 	readonly getAuthenticatedUser: () => Effect.Effect<string, GitHubError>
 	readonly getPullRequestDiff: (repository: string, number: number) => Effect.Effect<string, GitHubError>
 	readonly listPullRequestComments: (repository: string, number: number) => Effect.Effect<readonly PullRequestReviewComment[], GitHubError>
@@ -452,7 +452,7 @@ export class GitHubService extends Context.Service<GitHubService, {
 
 			const paginateSearch = <Item extends Schema.Top>(label: string, query: string, schema: Item, parse: (node: Item["Type"]) => PullRequestItem) => {
 				const responseSchema = SearchResponseSchema(schema)
-				return Effect.fn(`GitHubService.${label}`)(function*(mode: PullRequestQueueMode) {
+				return Effect.fn(`GitHubService.${label}`)(function*(mode: PullRequestQueueMode, repository: string | null) {
 					const pullRequests: PullRequestItem[] = []
 					let cursor: string | null = null
 
@@ -461,7 +461,7 @@ export class GitHubService extends Context.Service<GitHubService, {
 						const response: SearchResponse<Item["Type"]> = yield* command.runSchema(responseSchema, "gh", [
 							"api", "graphql",
 							"-f", `query=${query}`,
-							"-F", `searchQuery=${searchQuery(mode, config.author)}`,
+							"-F", `searchQuery=${searchQuery(mode, config.author, repository)}`,
 							"-F", `first=${pageSize}`,
 							...(cursor ? ["-F", `after=${cursor}`] : []),
 						])

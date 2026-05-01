@@ -51,6 +51,9 @@ export const SectionTitle = ({ title }: { title: string }) => (
 	</TextLine>
 )
 
+export const Filler = ({ rows, prefix }: { rows: number; prefix: string }) =>
+	<>{Array.from({ length: rows }, (_, index) => <box key={`${prefix}-${index}`} height={1} />)}</>
+
 export const Divider = ({ width, junctionAt, junctionChar }: { width: number; junctionAt?: number; junctionChar?: string }) => {
 	if (junctionAt === undefined || junctionChar === undefined || junctionAt < 0 || junctionAt >= width) {
 		return <PlainLine text={"─".repeat(Math.max(1, width))} fg={colors.separator} />

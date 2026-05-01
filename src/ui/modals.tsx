@@ -5,7 +5,7 @@ import type { PullRequestLabel, PullRequestMergeInfo, PullRequestReviewComment }
 import { availableMergeActions } from "../mergeActions.js"
 import { clampCursor, commentEditorLines, cursorLineIndexForLines } from "./commentEditor.js"
 import { colors, filterThemeDefinitions, themeDefinitions, type ThemeId } from "./colors.js"
-import { centerCell, Divider, fitCell, ModalFrame, PlainLine, TextLine } from "./primitives.js"
+import { centerCell, Divider, Filler, fitCell, ModalFrame, PlainLine, TextLine } from "./primitives.js"
 import { labelColor, shortRepoName } from "./pullRequests.js"
 
 export interface LabelModalState {
@@ -56,6 +56,17 @@ export interface CommandPaletteState {
 	readonly selectedIndex: number
 }
 
+export interface OpenRepositoryModalState {
+	readonly query: string
+	readonly error: string | null
+}
+
+export const filterLabels = (labels: readonly PullRequestLabel[], query: string) => {
+	const normalized = query.trim().toLowerCase()
+	if (normalized.length === 0) return labels
+	return labels.filter((label) => label.name.toLowerCase().includes(normalized))
+}
+
 export const initialLabelModalState: LabelModalState = {
 	repository: null,
 	query: "",
@@ -104,6 +115,11 @@ export const initialCommandPaletteState: CommandPaletteState = {
 	selectedIndex: 0,
 }
 
+export const initialOpenRepositoryModalState: OpenRepositoryModalState = {
+	query: "",
+	error: null,
+}
+
 export type Modal = Data.TaggedEnum<{
 	None: {}
 	Label: LabelModalState
@@ -113,6 +129,7 @@ export type Modal = Data.TaggedEnum<{
 	CommentThread: CommentThreadModalState
 	Theme: ThemeModalState
 	CommandPalette: CommandPaletteState
+	OpenRepository: OpenRepositoryModalState
 }>
 
 export const Modal = Data.taggedEnum<Modal>()
@@ -129,7 +146,69 @@ export const modalInitialStates = {
 	CommentThread: initialCommentThreadModalState,
 	Theme: initialThemeModalState,
 	CommandPalette: initialCommandPaletteState,
+	OpenRepository: initialOpenRepositoryModalState,
 } as const satisfies { [Tag in Exclude<ModalTag, "None">]: ModalState<Tag> }
+
+export const OpenRepositoryModal = ({
+	state,
+	modalWidth,
+	modalHeight,
+	offsetLeft,
+	offsetTop,
+}: {
+	state: OpenRepositoryModalState
+	modalWidth: number
+	modalHeight: number
+	offsetLeft: number
+	offsetTop: number
+}) => {
+	const innerWidth = Math.max(16, modalWidth - 2)
+	const contentWidth = Math.max(14, innerWidth - 2)
+	const title = "Open Repository"
+	const rightText = "owner/name"
+	const headerGap = Math.max(1, contentWidth - title.length - rightText.length)
+	const bodyHeight = Math.max(1, modalHeight - 7)
+	const inputText = state.query.length > 0 ? state.query : "owner/name or GitHub URL"
+
+	return (
+		<ModalFrame left={offsetLeft} top={offsetTop} width={modalWidth} height={modalHeight} junctionRows={[2, modalHeight - 4]}>
+			<box height={1} paddingLeft={1} paddingRight={1}>
+				<TextLine>
+					<span fg={colors.accent} attributes={TextAttributes.BOLD}>{title}</span>
+					<span fg={colors.muted}>{" ".repeat(headerGap)}</span>
+					<span fg={colors.muted}>{rightText}</span>
+				</TextLine>
+			</box>
+			<box height={1} paddingLeft={1} paddingRight={1}>
+				<TextLine>
+					<span fg={colors.count}>› </span>
+					<span fg={state.query.length > 0 ? colors.text : colors.muted}>{fitCell(inputText, Math.max(1, contentWidth - 2))}</span>
+				</TextLine>
+			</box>
+			<Divider width={innerWidth} />
+			<box height={bodyHeight} flexDirection="column" paddingLeft={1} paddingRight={1}>
+				{state.error ? (
+					<PlainLine text={fitCell(state.error, contentWidth)} fg={colors.error} />
+				) : (
+					<PlainLine text={fitCell("Switches to the selected repository view.", contentWidth)} fg={colors.muted} />
+				)}
+			</box>
+			<Divider width={innerWidth} />
+			<box height={1} paddingLeft={1} paddingRight={1}>
+				<TextLine>
+					<span fg={colors.count}>enter</span>
+					<span fg={colors.muted}> open  </span>
+					<span fg={colors.count}>ctrl-u</span>
+					<span fg={colors.muted}> clear  </span>
+					<span fg={colors.count}>ctrl-w</span>
+					<span fg={colors.muted}> word  </span>
+					<span fg={colors.count}>esc</span>
+					<span fg={colors.muted}> cancel</span>
+				</TextLine>
+			</box>
+		</ModalFrame>
+	)
+}
 
 const mergeUnavailableReason = (info: PullRequestMergeInfo | null) => {
 	if (!info) return "Loading merge status from GitHub."
@@ -160,9 +239,7 @@ export const LabelModal = ({
 	const contentWidth = Math.max(14, innerWidth - 2)
 	const rowWidth = innerWidth
 	const currentNames = new Set(currentLabels.map((l) => l.name.toLowerCase()))
-	const filtered = state.availableLabels.filter((label) =>
-		state.query.length === 0 || label.name.toLowerCase().includes(state.query.toLowerCase()),
-	)
+	const filtered = filterLabels(state.availableLabels, state.query)
 	const maxVisible = Math.max(1, modalHeight - 7)
 	const labelMessageTopRows = Math.max(0, Math.floor((maxVisible - 1) / 2))
 	const labelMessageBottomRows = Math.max(0, maxVisible - labelMessageTopRows - 1)
@@ -198,15 +275,15 @@ export const LabelModal = ({
 			<box height={maxVisible} flexDirection="column">
 				{state.loading ? (
 					<>
-						{Array.from({ length: labelMessageTopRows }, (_, index) => <box key={`top-${index}`} height={1} />)}
+						<Filler rows={labelMessageTopRows} prefix="top" />
 						<PlainLine text={centerCell(`${loadingIndicator} Loading labels`, rowWidth)} fg={colors.muted} />
-						{Array.from({ length: labelMessageBottomRows }, (_, index) => <box key={`bottom-${index}`} height={1} />)}
+						<Filler rows={labelMessageBottomRows} prefix="bottom" />
 					</>
 				) : visibleLabels.length === 0 ? (
 					<>
-						{Array.from({ length: labelMessageTopRows }, (_, index) => <box key={`top-${index}`} height={1} />)}
+						<Filler rows={labelMessageTopRows} prefix="top" />
 						<PlainLine text={centerCell(state.query.length > 0 ? "No matching labels" : "No labels found", rowWidth)} fg={colors.muted} />
-						{Array.from({ length: labelMessageBottomRows }, (_, index) => <box key={`bottom-${index}`} height={1} />)}
+						<Filler rows={labelMessageBottomRows} prefix="bottom" />
 					</>
 				) : (
 					visibleLabels.map((label, index) => {
@@ -291,9 +368,9 @@ export const MergeModal = ({
 			<box height={optionAreaHeight} flexDirection="column">
 				{state.loading ? (
 					<>
-						{Array.from({ length: loadingTopRows }, (_, index) => <box key={`top-${index}`} height={1} />)}
+						<Filler rows={loadingTopRows} prefix="top" />
 						<PlainLine text={centerCell(`${loadingIndicator} Loading merge status`, rowWidth)} fg={colors.muted} />
-						{Array.from({ length: loadingBottomRows }, (_, index) => <box key={`bottom-${index}`} height={1} />)}
+						<Filler rows={loadingBottomRows} prefix="bottom" />
 					</>
 				) : state.error ? (
 					<PlainLine text={centerCell(state.error, rowWidth)} fg={colors.error} />
@@ -381,10 +458,10 @@ export const CloseModal = ({
 					<PlainLine text={fitCell(state.error, contentWidth)} fg={colors.error} />
 				) : (
 					<>
-						{Array.from({ length: topRows }, (_, index) => <box key={`top-${index}`} height={1} />)}
+						<Filler rows={topRows} prefix="top" />
 						<PlainLine text={titleLines[0]!} fg={colors.muted} />
 						<PlainLine text={titleLines[1]!} fg={colors.text} bold />
-						{Array.from({ length: bottomRows }, (_, index) => <box key={`bottom-${index}`} height={1} />)}
+						<Filler rows={bottomRows} prefix="bottom" />
 					</>
 				)}
 			</box>
@@ -648,9 +725,9 @@ export const ThemeModal = ({
 			<box height={maxVisible} flexDirection="column">
 				{visibleThemes.length === 0 ? (
 					<>
-						{Array.from({ length: messageTopRows }, (_, index) => <box key={`top-${index}`} height={1} />)}
+						<Filler rows={messageTopRows} prefix="top" />
 						<PlainLine text={centerCell("No matching themes", rowWidth)} fg={colors.muted} />
-						{Array.from({ length: messageBottomRows }, (_, index) => <box key={`bottom-${index}`} height={1} />)}
+						<Filler rows={messageBottomRows} prefix="bottom" />
 					</>
 				) : visibleThemes.map((theme, index) => {
 					const actualIndex = scrollStart + index
