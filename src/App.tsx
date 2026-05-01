@@ -12,6 +12,7 @@ import { availableMergeActions, mergeInfoFromPullRequest } from "./mergeActions.
 import { Observability } from "./observability.js"
 import { BrowserOpener } from "./services/BrowserOpener.js"
 import { Clipboard } from "./services/Clipboard.js"
+import { CommandRunner } from "./services/CommandRunner.js"
 import { GitHubService } from "./services/GitHubService.js"
 import { loadStoredThemeId, saveStoredThemeId } from "./themeStore.js"
 import { colors, filterThemeDefinitions, setActiveTheme, themeDefinitions, type ThemeId } from "./ui/colors.js"
@@ -26,7 +27,10 @@ import { PullRequestDiffPane } from "./ui/PullRequestDiffPane.js"
 import { PullRequestList } from "./ui/PullRequestList.js"
 
 const githubRuntime = Atom.runtime(
-	Layer.mergeAll(GitHubService.layer, Clipboard.layer, BrowserOpener.layer).pipe(Layer.provideMerge(Observability.layer)),
+	Layer.mergeAll(GitHubService.layerNoDeps, Clipboard.layerNoDeps, BrowserOpener.layerNoDeps).pipe(
+		Layer.provide(CommandRunner.layer),
+		Layer.provideMerge(Observability.layer),
+	),
 )
 const initialThemeId = await Effect.runPromise(loadStoredThemeId)
 

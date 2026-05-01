@@ -5,19 +5,17 @@ export class ClipboardError extends Schema.TaggedErrorClass<ClipboardError>()("C
 	detail: Schema.String,
 }) {}
 
-const clipboardCommands = (): readonly (readonly [string, ...readonly string[]])[] => {
-	if (process.platform === "darwin") return [["pbcopy"]]
-	if (process.platform === "linux") {
-		return [
-			...(process.env.WAYLAND_DISPLAY ? [["wl-copy"] as const] : []),
-			["xclip", "-selection", "clipboard"],
-			["xsel", "--clipboard", "--input"],
-		]
-	}
-	return []
-}
+const clipboardCommands: readonly (readonly [string, ...readonly string[]])[] =
+	process.platform === "darwin" ? [["pbcopy"]]
+	: process.platform === "linux" ? [
+		...(process.env.WAYLAND_DISPLAY ? [["wl-copy"] as const] : []),
+		["xclip", "-selection", "clipboard"] as const,
+		["xsel", "--clipboard", "--input"] as const,
+	]
+	: []
 
 const installHint = process.platform === "linux" ? " Install wl-clipboard, xclip, or xsel." : ""
+const unavailableDetail = `Clipboard is not available.${installHint}`
 
 export class Clipboard extends Context.Service<Clipboard, {
 	readonly copy: (text: string) => Effect.Effect<void, ClipboardError>
@@ -28,18 +26,16 @@ export class Clipboard extends Context.Service<Clipboard, {
 			const command = yield* CommandRunner
 
 			const copy = Effect.fn("Clipboard.copy")(function*(text: string) {
-				const commands = clipboardCommands()
-				if (commands.length === 0) {
-					return yield* new ClipboardError({ detail: `Clipboard is not available.${installHint}` })
+				if (clipboardCommands.length === 0) {
+					return yield* new ClipboardError({ detail: unavailableDetail })
 				}
-
 				let lastDetail = ""
-				for (const [cmd, ...args] of commands) {
+				for (const [cmd, ...args] of clipboardCommands) {
 					const result = yield* command.run(cmd, args, { stdin: text }).pipe(Effect.result)
 					if (result._tag === "Success") return
 					lastDetail = result.failure.detail
 				}
-				return yield* new ClipboardError({ detail: lastDetail || `Clipboard is not available.${installHint}` })
+				return yield* new ClipboardError({ detail: lastDetail || unavailableDetail })
 			})
 
 			return Clipboard.of({ copy })
