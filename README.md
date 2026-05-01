@@ -57,7 +57,25 @@ GHUI_AUTHOR=@me ghui
 
 You can also copy `.env.example` to `.env` and edit the values locally.
 
-## Keybindings
+## Custom Keybindings
+
+ghui reads its configuration from `~/.config/ghui/config.json` (or `$XDG_CONFIG_HOME/ghui/config.json`). Add a `keybindings` object to override any default binding:
+
+```json
+{
+  "keybindings": {
+    "merge": "ctrl+m",
+    "close": "ctrl+x",
+    "toggleDraft": ["ctrl+s", "shift+s"]
+  }
+}
+```
+
+Each key is an action name and each value is a key or array of keys. Use an array to bind multiple keys to one action. Keys can be plain (`"d"`, `"escape"`) or include modifiers (`"ctrl+m"`, `"shift+k"`, `"alt+x"`). An override fully replaces the defaults for that action.
+
+Available actions: `navigateUp`, `navigateDown`, `navigateGroupUp`, `navigateGroupDown`, `halfPageUp`, `halfPageDown`, `goToTop`, `goToBottom`, `select`, `back`, `openDiff`, `openInBrowser`, `copyMetadata`, `merge`, `close`, `toggleDraft`, `labels`, `refresh`, `filter`, `clearFilter`, `switchTab`, `toggleDiffView`, `toggleDiffWrap`, `enterCommentMode`, `jumpFileNext`, `jumpFilePrev`, `openTheme`, `quit`.
+
+## Default Keybindings
 
 - `up` / `down`: move selection
 - `k` / `j`: move selection

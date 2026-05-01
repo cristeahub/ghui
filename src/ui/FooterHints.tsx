@@ -1,3 +1,4 @@
+import type { Action } from "../keybindings.js"
 import { Data } from "effect"
 import { colors } from "./colors.js"
 import { TextLine } from "./primitives.js"
@@ -22,6 +23,7 @@ export const FooterHints = ({
 	isLoading,
 	loadingIndicator,
 	retryProgress,
+	hint,
 }: {
 	filterEditing: boolean
 	showFilterClear: boolean
@@ -34,6 +36,7 @@ export const FooterHints = ({
 	isLoading: boolean
 	loadingIndicator: string
 	retryProgress: RetryProgress
+	hint: (action: Action) => string
 }) => {
 	if (filterEditing) {
 		return (
@@ -64,36 +67,36 @@ export const FooterHints = ({
 					<span fg={colors.muted}> jump  </span>
 					<span fg={colors.count}>←→</span>
 					<span fg={colors.muted}> side  </span>
-					<span fg={colors.count}>enter</span>
+					<span fg={colors.count}>{hint("select")}</span>
 					<span fg={colors.muted}> open  </span>
 					<span fg={colors.count}>a</span>
 					<span fg={colors.muted}> comment  </span>
-					<span fg={colors.count}>c</span>
+					<span fg={colors.count}>{hint("enterCommentMode")}</span>
 					<span fg={colors.muted}> done  </span>
-					<span fg={colors.count}>[]</span>
+					<span fg={colors.count}>{hint("jumpFilePrev")}{hint("jumpFileNext")}</span>
 					<span fg={colors.muted}> files  </span>
-					<span fg={colors.count}>esc</span>
+					<span fg={colors.count}>{hint("back")}</span>
 					<span fg={colors.muted}> back</span>
 				</TextLine>
 			)
 		}
 		return (
 			<TextLine>
-				<span fg={colors.count}>esc</span>
+				<span fg={colors.count}>{hint("back")}</span>
 				<span fg={colors.muted}> back  </span>
-				<span fg={colors.count}>v</span>
+				<span fg={colors.count}>{hint("toggleDiffView")}</span>
 				<span fg={colors.muted}> view  </span>
-				<span fg={colors.count}>w</span>
+				<span fg={colors.count}>{hint("toggleDiffWrap")}</span>
 				<span fg={colors.muted}> wrap  </span>
-				<span fg={colors.count}>c</span>
+				<span fg={colors.count}>{hint("enterCommentMode")}</span>
 				<span fg={colors.muted}> comment  </span>
-				<span fg={colors.count}>[]</span>
+				<span fg={colors.count}>{hint("jumpFilePrev")}{hint("jumpFileNext")}</span>
 				<span fg={colors.muted}> files  </span>
-				<span fg={colors.count}>r</span>
+				<span fg={colors.count}>{hint("refresh")}</span>
 				<span fg={colors.muted}> reload  </span>
-				<span fg={colors.count}>o</span>
+				<span fg={colors.count}>{hint("openInBrowser")}</span>
 				<span fg={colors.muted}> open  </span>
-				<span fg={colors.count}>q</span>
+				<span fg={colors.count}>{hint("quit")}</span>
 				<span fg={colors.muted}> quit</span>
 			</TextLine>
 		)
@@ -102,37 +105,37 @@ export const FooterHints = ({
 	if (detailFullView) {
 		return (
 			<TextLine>
-				<span fg={colors.count}>esc</span>
+				<span fg={colors.count}>{hint("back")}</span>
 				<span fg={colors.muted}> back  </span>
 				<span fg={colors.count}>↑↓</span>
 				<span fg={colors.muted}> scroll  </span>
-				<span fg={colors.count}>r</span>
+				<span fg={colors.count}>{hint("refresh")}</span>
 				<span fg={colors.muted}>{hasError ? " retry  " : " refresh  "}</span>
-				<span fg={colors.count}>t</span>
+				<span fg={colors.count}>{hint("openTheme")}</span>
 				<span fg={colors.muted}> theme  </span>
 				{hasSelection ? (
 					<>
-						<span fg={colors.count}>s</span>
+						<span fg={colors.count}>{hint("toggleDraft")}</span>
 						<span fg={colors.muted}> state  </span>
-						<span fg={colors.count}>d</span>
+						<span fg={colors.count}>{hint("openDiff")}</span>
 						<span fg={colors.muted}> diff  </span>
-						<span fg={colors.count}>l</span>
+						<span fg={colors.count}>{hint("labels")}</span>
 						<span fg={colors.muted}> labels  </span>
-						<span fg={colors.count}>m</span>
+						<span fg={colors.count}>{hint("merge")}</span>
 						<span fg={colors.muted}> merge  </span>
 						{canCloseSelection ? (
 							<>
-								<span fg={colors.count}>x</span>
+								<span fg={colors.count}>{hint("close")}</span>
 								<span fg={colors.muted}> close  </span>
 							</>
 						) : null}
 					</>
 				) : null}
-				<span fg={colors.count}>o</span>
+				<span fg={colors.count}>{hint("openInBrowser")}</span>
 				<span fg={colors.muted}> open  </span>
-				<span fg={colors.count}>y</span>
+				<span fg={colors.count}>{hint("copyMetadata")}</span>
 				<span fg={colors.muted}> copy  </span>
-				<span fg={colors.count}>q</span>
+				<span fg={colors.count}>{hint("quit")}</span>
 				<span fg={colors.muted}> quit</span>
 			</TextLine>
 		)
@@ -140,15 +143,15 @@ export const FooterHints = ({
 
 	return (
 		<TextLine>
-			<span fg={colors.count}>tab</span>
+			<span fg={colors.count}>{hint("switchTab")}</span>
 			<span fg={colors.muted}> queue  </span>
-			<span fg={colors.count}>/</span>
+			<span fg={colors.count}>{hint("filter")}</span>
 			<span fg={colors.muted}> filter  </span>
-			<span fg={colors.count}>t</span>
+			<span fg={colors.count}>{hint("openTheme")}</span>
 			<span fg={colors.muted}> theme  </span>
 			{showFilterClear ? (
 				<>
-					<span fg={colors.count}>esc</span>
+					<span fg={colors.count}>{hint("clearFilter")}</span>
 					<span fg={colors.muted}> clear  </span>
 				</>
 			) : null}
@@ -163,31 +166,31 @@ export const FooterHints = ({
 					<span fg={colors.muted}> loading  </span>
 				</>
 			) : null}
-			<span fg={colors.count}>r</span>
+			<span fg={colors.count}>{hint("refresh")}</span>
 			<span fg={colors.muted}>{hasError ? " retry  " : " refresh  "}</span>
 			{hasSelection ? (
 				<>
-					<span fg={colors.count}>s</span>
+					<span fg={colors.count}>{hint("toggleDraft")}</span>
 					<span fg={colors.muted}> state  </span>
-					<span fg={colors.count}>d</span>
+					<span fg={colors.count}>{hint("openDiff")}</span>
 					<span fg={colors.muted}> diff  </span>
-					<span fg={colors.count}>l</span>
+					<span fg={colors.count}>{hint("labels")}</span>
 					<span fg={colors.muted}> labels  </span>
-					<span fg={colors.count}>m</span>
+					<span fg={colors.count}>{hint("merge")}</span>
 					<span fg={colors.muted}> merge  </span>
 					{canCloseSelection ? (
 						<>
-							<span fg={colors.count}>x</span>
+							<span fg={colors.count}>{hint("close")}</span>
 							<span fg={colors.muted}> close  </span>
 						</>
 					) : null}
-					<span fg={colors.count}>o</span>
+					<span fg={colors.count}>{hint("openInBrowser")}</span>
 					<span fg={colors.muted}> open  </span>
-					<span fg={colors.count}>y</span>
+					<span fg={colors.count}>{hint("copyMetadata")}</span>
 					<span fg={colors.muted}> copy  </span>
 				</>
 			) : null}
-			<span fg={colors.count}>q</span>
+			<span fg={colors.count}>{hint("quit")}</span>
 			<span fg={colors.muted}> quit</span>
 		</TextLine>
 	)

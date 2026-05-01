@@ -6,13 +6,13 @@ import * as AsyncResult from "effect/unstable/reactivity/AsyncResult"
 import * as Atom from "effect/unstable/reactivity/Atom"
 import { useEffect, useMemo, useRef, useState } from "react"
 import { config } from "./config.js"
-import { matchesAction } from "./keybindings.js"
+import { hintLabel, matchesAction as matchesActionWith, type Bindings } from "./keybindings.js"
 import { pullRequestQueueLabels, pullRequestQueueModes, type CreatePullRequestCommentInput, type DiffCommentSide, type LoadStatus, type PullRequestItem, type PullRequestLabel, type PullRequestMergeAction, type PullRequestQueueMode, type PullRequestReviewComment } from "./domain.js"
 import { formatShortDate, formatTimestamp } from "./date.js"
 import { availableMergeActions, mergeInfoFromPullRequest } from "./mergeActions.js"
 import { Observability } from "./observability.js"
 import { GitHubService } from "./services/GitHubService.js"
-import { loadStoredThemeId, saveStoredThemeId } from "./themeStore.js"
+import { loadStoredConfig, saveStoredThemeId } from "./configStore.js"
 import { colors, filterThemeDefinitions, setActiveTheme, themeDefinitions, type ThemeId } from "./ui/colors.js"
 import { backspace as editorBackspace, deleteForward as editorDeleteForward, deleteToLineEnd, deleteToLineStart, deleteWordBackward, deleteWordForward, insertText, moveLeft as editorMoveLeft, moveLineEnd, moveLineStart, moveRight as editorMoveRight, moveVertically, moveWordBackward, moveWordForward, type CommentEditorValue } from "./ui/commentEditor.js"
 import { buildStackedDiffFiles, diffCommentAnchorKey, diffCommentLocationKey, getStackedDiffCommentAnchors, nearestDiffCommentAnchorIndex, PullRequestDiffState, pullRequestDiffKey, safeDiffFileIndex, scrollTopForVisibleLine, splitPatchFiles, stackedDiffFileAtLine, type DiffCommentAnchor, type DiffView, type DiffWrapMode, type StackedDiffCommentAnchor } from "./ui/diff.js"
@@ -25,7 +25,11 @@ import { PullRequestDiffPane } from "./ui/PullRequestDiffPane.js"
 import { PullRequestList } from "./ui/PullRequestList.js"
 
 const githubRuntime = Atom.runtime(GitHubService.layer.pipe(Layer.provideMerge(Observability.layer)))
-const initialThemeId = await Effect.runPromise(loadStoredThemeId)
+const initialConfig = await Effect.runPromise(loadStoredConfig)
+const initialThemeId = initialConfig.themeId
+const bindings: Bindings = initialConfig.bindings
+const matchesAction: typeof matchesActionWith = (key, action) => matchesActionWith(key, action, bindings)
+const hint: typeof hintLabel = (action) => hintLabel(action, bindings)
 
 
 interface PullRequestLoad {
@@ -2244,6 +2248,7 @@ export const App = () => {
 						isLoading={pullRequestStatus === "loading" || isRefreshingPullRequests || isHydratingPullRequestDetails || closeModal.running || mergeModal.running}
 						loadingIndicator={loadingIndicator}
 						retryProgress={retryProgress}
+						hint={hint}
 					/>
 				)}
 			</box>

@@ -2,10 +2,12 @@ import { mkdir } from "node:fs/promises"
 import { homedir } from "node:os"
 import { dirname, join } from "node:path"
 import { Effect } from "effect"
+import { loadBindings, type Bindings } from "./keybindings.js"
 import { isThemeId, type ThemeId } from "./ui/colors.js"
 
 interface StoredConfig {
 	readonly theme?: unknown
+	readonly keybindings?: unknown
 }
 
 const configDirectory = () => {
@@ -22,13 +24,23 @@ const parseConfig = (text: string): StoredConfig => {
 	return value && typeof value === "object" ? value : {}
 }
 
-export const loadStoredThemeId: Effect.Effect<ThemeId> = Effect.catchCause(Effect.tryPromise(async () => {
+export interface StoredAppConfig {
+	readonly themeId: ThemeId
+	readonly bindings: Bindings
+}
+
+const defaultAppConfig: StoredAppConfig = { themeId: "ghui", bindings: loadBindings(undefined) }
+
+export const loadStoredConfig: Effect.Effect<StoredAppConfig> = Effect.catchCause(Effect.tryPromise(async () => {
 	const file = Bun.file(configPath())
-	if (!(await file.exists())) return "ghui" satisfies ThemeId
+	if (!(await file.exists())) return defaultAppConfig
 
 	const config = parseConfig(await file.text())
-	return isThemeId(config.theme) ? config.theme : "ghui"
-}), () => Effect.succeed("ghui" satisfies ThemeId))
+	return {
+		themeId: isThemeId(config.theme) ? config.theme : "ghui",
+		bindings: loadBindings(config.keybindings),
+	}
+}), () => Effect.succeed(defaultAppConfig))
 
 export const saveStoredThemeId = (theme: ThemeId): Effect.Effect<void> => Effect.tryPromise(async () => {
 	const path = configPath()
