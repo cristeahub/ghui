@@ -1052,6 +1052,16 @@ export const App = () => {
 		}
 		diffCommentLineColorsRef.current = { contextKey: diffLineColorContextKey, entries: nextEntries }
 	}, [selectedDiffCommentAnchor?.renderLine, selectedDiffCommentAnchor?.localRenderLine, selectedDiffCommentAnchor?.side, selectedDiffCommentAnchor?.fileIndex, selectedDiffCommentRangeAnchors, diffLineColorContextKey, effectiveDiffRenderView, diffCommentThreadAnchors])
+
+	// Scroll the selected line into view when the diff view is opened. Previously
+	// opentui's `focused` scrollbox did this auto-scroll on mount; with the keymap
+	// migration the scrollbox is `focusable={false}` so we have to scroll explicitly.
+	useEffect(() => {
+		if (!diffFullView) return
+		if (!selectedDiffCommentAnchor) return
+		ensureDiffLineVisible(selectedDiffCommentAnchor.renderLine)
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [diffFullView])
 	const isHydratingPullRequestDetails = pullRequestStatus === "ready" && selectedPullRequest?.state === "open" && !selectedPullRequest.detailLoaded
 	const isRefreshingPullRequests = pullRequestResult.waiting && pullRequestLoad !== null
 	const hasActiveLoadingIndicator = pullRequestResult.waiting || isHydratingPullRequestDetails || isLoadingMorePullRequests || labelModal.loading || closeModal.running || mergeModal.loading || mergeModal.running || selectedDiffState?._tag === "Loading"
@@ -2285,7 +2295,7 @@ export const App = () => {
 					{selectedPullRequest ? (
 						<>
 							<DetailHeader pullRequest={selectedPullRequest} viewerUsername={username} contentWidth={fullscreenContentWidth} paneWidth={contentWidth} showChecks />
-							<scrollbox ref={detailScrollRef} focused flexGrow={1} verticalScrollbarOptions={{ visible: fullscreenDetailBodyScrollable }}>
+							<scrollbox ref={detailScrollRef} focusable={false} flexGrow={1} verticalScrollbarOptions={{ visible: fullscreenDetailBodyScrollable }}>
 								<DetailBody pullRequest={selectedPullRequest} contentWidth={fullscreenContentWidth} bodyLines={fullscreenBodyLines} bodyLineLimit={DETAIL_BODY_SCROLL_LIMIT} loadingIndicator={loadingIndicator} themeId={themeId} />
 							</scrollbox>
 						</>
@@ -2326,7 +2336,7 @@ export const App = () => {
 					{selectedPullRequest ? (
 						<>
 							<DetailHeader pullRequest={selectedPullRequest} viewerUsername={username} contentWidth={fullscreenContentWidth} paneWidth={contentWidth} />
-							<scrollbox ref={detailScrollRef} focused flexGrow={1} verticalScrollbarOptions={{ visible: fullscreenDetailBodyScrollable }}>
+							<scrollbox ref={detailScrollRef} focusable={false} flexGrow={1} verticalScrollbarOptions={{ visible: fullscreenDetailBodyScrollable }}>
 								<DetailBody pullRequest={selectedPullRequest} contentWidth={fullscreenContentWidth} bodyLines={fullscreenBodyLines} bodyLineLimit={DETAIL_BODY_SCROLL_LIMIT} loadingIndicator={loadingIndicator} themeId={themeId} />
 							</scrollbox>
 						</>

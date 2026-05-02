@@ -177,7 +177,7 @@ export const PullRequestDiffPane = ({
 		<box height={height} flexDirection="column">
 			<DiffPaneHeader pullRequest={pullRequest} paneWidth={paneWidth} />
 			<Divider width={paneWidth} />
-			<scrollbox ref={scrollRef} focused flexGrow={1} scrollY scrollX={false} onMouseDown={handleDiffMouseDown}>
+			<scrollbox ref={scrollRef} focusable={false} flexGrow={1} scrollY scrollX={false} onMouseDown={handleDiffMouseDown}>
 				{stackedFiles.map((stackedFile) => (
 					<box key={`${pullRequest.url}-${stackedFile.index}-${view}-${wrapMode}`} flexDirection="column" flexShrink={0}>
 						{stackedFile.index > 0 ? <Divider width={paneWidth} /> : null}
