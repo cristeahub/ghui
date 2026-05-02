@@ -1,5 +1,6 @@
 import type { DiffRenderable, PasteEvent, ScrollBoxRenderable } from "@opentui/core"
 import { RegistryContext, useAtom, useAtomRefresh, useAtomSet, useAtomValue } from "@effect/atom-react"
+import { useAppCommandRegistry } from "./keyboard/useAppCommandRegistry.js"
 import { useScopedBindings } from "./keyboard/useScopedBindings.js"
 import { useKeyboard, useRenderer, useTerminalDimensions } from "@opentui/react"
 import { Cause, Effect, Layer, Schedule } from "effect"
@@ -1716,6 +1717,9 @@ export const App = () => {
 		const command = appCommands.find((entry) => entry.id === id)
 		return command ? runCommand(command, options) : false
 	}
+	const runCommandByIdRef = useRef(runCommandById)
+	runCommandByIdRef.current = runCommandById
+	useAppCommandRegistry(appCommands, runCommandByIdRef)
 	const dynamicPaletteCommands: readonly AppCommand[] = (() => {
 		if (!commandPaletteActive) return []
 		const repository = parseRepositoryInput(commandPalette.query)
@@ -1753,27 +1757,27 @@ export const App = () => {
 	useScopedBindings({
 		when: globalLayerActive,
 		bindings: {
-			"/": () => runCommandById("filter.open"),
-			r: () => runCommandById("pull.refresh"),
-			t: () => runCommandById("theme.open"),
-			d: () => runCommandById("diff.open"),
-			l: () => runCommandById("pull.labels"),
-			m: () => runCommandById("pull.merge"),
-			"shift+m": () => runCommandById("pull.merge"),
-			x: () => runCommandById("pull.close"),
-			o: () => runCommandById("pull.open-browser"),
-			s: () => runCommandById("pull.toggle-draft"),
-			"shift+s": () => runCommandById("pull.toggle-draft"),
-			y: () => runCommandById("pull.copy-metadata"),
-			return: () => runCommandById("detail.open"),
+			"/": "filter.open",
+			r: "pull.refresh",
+			t: "theme.open",
+			d: "diff.open",
+			l: "pull.labels",
+			m: "pull.merge",
+			"shift+m": "pull.merge",
+			x: "pull.close",
+			o: "pull.open-browser",
+			s: "pull.toggle-draft",
+			"shift+s": "pull.toggle-draft",
+			y: "pull.copy-metadata",
+			return: "detail.open",
 		},
 	})
 
 	useScopedBindings({
 		when: true,
 		bindings: {
-			"ctrl+p": () => runCommandById("command.open"),
-			"meta+k": () => runCommandById("command.open"),
+			"ctrl+p": "command.open",
+			"meta+k": "command.open",
 		},
 	})
 
@@ -1924,13 +1928,12 @@ export const App = () => {
 		},
 	})
 
-	const diffReady = selectedDiffState?._tag === "Ready"
 	useScopedBindings({
 		when: diffFullView && !diffCommentMode,
 		bindings: {
-			escape: () => runCommandById("diff.close"),
-			return: () => runCommandById("diff.close"),
-			c: () => { if (diffReady) runCommandById("diff.comment-mode") },
+			escape: "diff.close",
+			return: "diff.close",
+			c: "diff.comment-mode",
 			home: () => scrollDiffTo(0),
 			end: () => scrollDiffTo(Number.MAX_SAFE_INTEGER),
 			pageup: () => scrollDiffBy(-halfPage),
@@ -1944,16 +1947,16 @@ export const App = () => {
 			"ctrl+u": () => scrollDiffBy(-halfPage),
 			"ctrl+d": () => scrollDiffBy(halfPage),
 			"ctrl+v": () => scrollDiffBy(halfPage),
-			v: () => runCommandById("diff.toggle-view"),
-			w: () => runCommandById("diff.toggle-wrap"),
-			r: () => { if (selectedPullRequest) runCommandById("diff.reload") },
-			"]": () => { if (diffReady) runCommandById("diff.next-file") },
-			right: () => { if (diffReady) runCommandById("diff.next-file") },
-			l: () => { if (diffReady) runCommandById("diff.next-file") },
-			"[": () => { if (diffReady) runCommandById("diff.previous-file") },
-			left: () => { if (diffReady) runCommandById("diff.previous-file") },
-			h: () => { if (diffReady) runCommandById("diff.previous-file") },
-			o: () => { if (selectedPullRequest) runCommandById("pull.open-browser") },
+			v: "diff.toggle-view",
+			w: "diff.toggle-wrap",
+			r: "diff.reload",
+			"]": "diff.next-file",
+			right: "diff.next-file",
+			l: "diff.next-file",
+			"[": "diff.previous-file",
+			left: "diff.previous-file",
+			h: "diff.previous-file",
+			o: "pull.open-browser",
 		},
 	})
 
@@ -1961,12 +1964,12 @@ export const App = () => {
 		when: diffFullView && diffCommentMode,
 		bindings: {
 			escape: () => setDiffCommentMode(false),
-			c: () => runCommandById("diff.comment-mode"),
+			c: "diff.comment-mode",
 			return: () => {
 				if (selectedDiffCommentThread.length > 0) openDiffCommentThreadModal()
 				else openDiffCommentModal()
 			},
-			a: () => runCommandById("diff.add-comment"),
+			a: "diff.add-comment",
 			pageup: () => moveDiffCommentAnchor(-halfPage),
 			"ctrl+u": () => moveDiffCommentAnchor(-halfPage),
 			pagedown: () => moveDiffCommentAnchor(halfPage),
@@ -1988,8 +1991,8 @@ export const App = () => {
 			h: () => selectDiffCommentSide("LEFT"),
 			right: () => selectDiffCommentSide("RIGHT"),
 			l: () => selectDiffCommentSide("RIGHT"),
-			"]": () => { if (diffReady) runCommandById("diff.next-file") },
-			"[": () => { if (diffReady) runCommandById("diff.previous-file") },
+			"]": "diff.next-file",
+			"[": "diff.previous-file",
 		},
 	})
 
@@ -2004,17 +2007,17 @@ export const App = () => {
 	useScopedBindings({
 		when: detailFullView,
 		bindings: {
-			escape: () => runCommandById("detail.close"),
-			return: () => runCommandById("detail.close"),
-			t: () => runCommandById("theme.open"),
-			d: () => { if (selectedPullRequest) runCommandById("diff.open") },
-			x: () => { if (selectedPullRequest?.state === "open") runCommandById("pull.close") },
-			l: () => { if (selectedPullRequest) runCommandById("pull.labels") },
-			m: () => { if (selectedPullRequest) runCommandById("pull.merge") },
-			"shift+m": () => { if (selectedPullRequest) runCommandById("pull.merge") },
-			s: () => { if (selectedPullRequest) runCommandById("pull.toggle-draft") },
-			"shift+s": () => { if (selectedPullRequest) runCommandById("pull.toggle-draft") },
-			r: () => runCommandById("pull.refresh"),
+			escape: "detail.close",
+			return: "detail.close",
+			t: "theme.open",
+			d: "diff.open",
+			x: "pull.close",
+			l: "pull.labels",
+			m: "pull.merge",
+			"shift+m": "pull.merge",
+			s: "pull.toggle-draft",
+			"shift+s": "pull.toggle-draft",
+			r: "pull.refresh",
 			home: () => scrollDetailFullViewTo(0),
 			end: () => scrollDetailFullViewTo(Number.MAX_SAFE_INTEGER),
 			pageup: () => scrollDetailFullViewBy(-halfPage),
@@ -2028,8 +2031,8 @@ export const App = () => {
 			"ctrl+u": () => scrollDetailFullViewBy(-halfPage),
 			"ctrl+d": () => scrollDetailFullViewBy(halfPage),
 			"ctrl+v": () => scrollDetailFullViewBy(halfPage),
-			o: () => { if (selectedPullRequest) runCommandById("pull.open-browser") },
-			y: () => { if (selectedPullRequest) runCommandById("pull.copy-metadata") },
+			o: "pull.open-browser",
+			y: "pull.copy-metadata",
 		},
 	})
 
@@ -2068,7 +2071,7 @@ export const App = () => {
 		bindings: {
 			tab: () => switchQueueMode(1),
 			"shift+tab": () => switchQueueMode(-1),
-			escape: () => { if (filterQuery.length > 0) runCommandById("filter.clear") },
+			escape: () => { if (filterQuery.length > 0) runCommandByIdRef.current("filter.clear") },
 			home: () => { if (isWideLayout && selectedPullRequest) scrollDetailPreviewTo(0) },
 			end: () => { if (isWideLayout && selectedPullRequest) scrollDetailPreviewTo(Number.MAX_SAFE_INTEGER) },
 			pageup: () => { if (isWideLayout && selectedPullRequest) scrollDetailPreviewBy(-halfPage) },
