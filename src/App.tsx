@@ -4,6 +4,7 @@ import { useKeyboard, useRenderer, useTerminalDimensions } from "@opentui/react"
 import { Cause, Effect, Layer, Schedule } from "effect"
 import * as AsyncResult from "effect/unstable/reactivity/AsyncResult"
 import * as Atom from "effect/unstable/reactivity/Atom"
+import * as AtomRegistry from "effect/unstable/reactivity/AtomRegistry"
 import { useContext, useEffect, useMemo, useRef, useState } from "react"
 import { buildAppCommands } from "./appCommands.js"
 import type { AppCommand } from "./commands.js"
@@ -92,6 +93,11 @@ interface AppliedDiffLineColor {
 interface AppliedDiffLineColorState {
 	readonly contextKey: string | null
 	readonly entries: readonly AppliedDiffLineColor[]
+}
+
+interface DetailHydration {
+	readonly token: symbol
+	notifyError: boolean
 }
 
 const PR_FETCH_RETRIES = 6
@@ -294,9 +300,10 @@ const listRepoLabelsAtom = githubRuntime.fn<string>()((repository) =>
 const listOpenPullRequestPageAtom = githubRuntime.fn<ListPullRequestPageInput>()((input) =>
 	GitHubService.use((github) => github.listOpenPullRequestPage(input))
 )
-const getPullRequestDetailsAtom = githubRuntime.fn<{ readonly repository: string; readonly number: number }>()((input) =>
-	GitHubService.use((github) => github.getPullRequestDetails(input.repository, input.number))
-)
+const pullRequestDetailsAtom = Atom.family((key: string) => {
+	const { repository, number } = parsePullRequestDetailAtomKey(key)
+	return githubRuntime.atom(GitHubService.use((github) => github.getPullRequestDetails(repository, number)))
+})
 const addPullRequestLabelAtom = githubRuntime.fn<{ readonly repository: string; readonly number: number; readonly label: string }>()((input) =>
 	GitHubService.use((github) => github.addPullRequestLabel(input.repository, input.number, input.label))
 )
@@ -358,6 +365,12 @@ const pullRequestMetadataText = (pullRequest: PullRequestItem) => {
 }
 
 const pullRequestDetailKey = (pullRequest: PullRequestItem) => `${pullRequest.url}:${pullRequest.headRefOid}`
+const pullRequestDetailAtomKey = (pullRequest: PullRequestItem) => `${pullRequest.repository}\u0000${pullRequest.number}\u0000${pullRequest.headRefOid}`
+const parsePullRequestDetailAtomKey = (key: string) => {
+	const [repository, number] = key.split("\u0000")
+	if (!repository || !number) throw new Error(`Invalid pull request detail key: ${key}`)
+	return { repository, number: Number.parseInt(number, 10) }
+}
 
 const isShiftG = (key: { readonly name: string; readonly shift?: boolean }) => key.name === "G" || key.name === "g" && key.shift
 
@@ -533,7 +546,6 @@ export const App = () => {
 	const usernameResult = useAtomValue(usernameAtom)
 	const loadRepoLabels = useAtomSet(listRepoLabelsAtom, { mode: "promise" })
 	const loadPullRequestPage = useAtomSet(listOpenPullRequestPageAtom, { mode: "promise" })
-	const loadPullRequestDetails = useAtomSet(getPullRequestDetailsAtom, { mode: "promise" })
 	const addPullRequestLabel = useAtomSet(addPullRequestLabelAtom, { mode: "promise" })
 	const removePullRequestLabel = useAtomSet(removePullRequestLabelAtom, { mode: "promise" })
 	const toggleDraftStatus = useAtomSet(toggleDraftAtom, { mode: "promise" })
@@ -562,7 +574,7 @@ export const App = () => {
 	const pendingGTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 	const diffPrefetchTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 	const detailPrefetchTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-	const detailHydrationRef = useRef(new Map<string, symbol>())
+	const detailHydrationRef = useRef(new Map<string, DetailHydration>())
 	const refreshGenerationRef = useRef(0)
 	const didMountQueueModeRef = useRef(false)
 	const lastPullRequestRefreshAtRef = useRef(0)
@@ -774,17 +786,22 @@ export const App = () => {
 	const hydratePullRequestDetails = (pullRequest: PullRequestItem, notifyError: boolean) => {
 		if (pullRequest.state !== "open" || pullRequest.detailLoaded) return false
 		const detailKey = pullRequestDetailKey(pullRequest)
-		if (detailHydrationRef.current.has(detailKey)) return false
+		const existing = detailHydrationRef.current.get(detailKey)
+		if (existing) {
+			if (notifyError) existing.notifyError = true
+			return false
+		}
 		if (!notifyError && detailHydrationRef.current.size >= DETAIL_PREFETCH_CONCURRENCY) return false
-		const token = Symbol(detailKey)
-		detailHydrationRef.current.set(detailKey, token)
+		const entry: DetailHydration = { token: Symbol(detailKey), notifyError }
+		detailHydrationRef.current.set(detailKey, entry)
 		const generation = refreshGenerationRef.current
-		void loadPullRequestDetails({ repository: pullRequest.repository, number: pullRequest.number }).then((detail) => {
-			if (generation === refreshGenerationRef.current && detailHydrationRef.current.get(detailKey) === token) applyPullRequestDetail(detail)
+		const atom = pullRequestDetailsAtom(pullRequestDetailAtomKey(pullRequest))
+		void Effect.runPromise(AtomRegistry.getResult(registry, atom, { suspendOnWaiting: true })).then((detail) => {
+			if (generation === refreshGenerationRef.current && detailHydrationRef.current.get(detailKey) === entry) applyPullRequestDetail(detail)
 		}).catch((error) => {
-			if (notifyError && generation === refreshGenerationRef.current && detailHydrationRef.current.get(detailKey) === token) flashNotice(errorMessage(error))
+			if (entry.notifyError && generation === refreshGenerationRef.current && detailHydrationRef.current.get(detailKey) === entry) flashNotice(errorMessage(error))
 		}).finally(() => {
-			if (detailHydrationRef.current.get(detailKey) === token) detailHydrationRef.current.delete(detailKey)
+			if (detailHydrationRef.current.get(detailKey) === entry) detailHydrationRef.current.delete(detailKey)
 		})
 		return true
 	}
