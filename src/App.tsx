@@ -1,5 +1,6 @@
 import type { DiffRenderable, PasteEvent, ScrollBoxRenderable } from "@opentui/core"
 import { RegistryContext, useAtom, useAtomRefresh, useAtomSet, useAtomValue } from "@effect/atom-react"
+import { useBindings } from "@opentui/keymap/react"
 import { useKeyboard, useRenderer, useTerminalDimensions } from "@opentui/react"
 import { Cause, Effect, Layer, Schedule } from "effect"
 import * as AsyncResult from "effect/unstable/reactivity/AsyncResult"
@@ -1743,6 +1744,49 @@ export const App = () => {
 	const selectedCommandIndex = clampCommandIndex(commandPalette.selectedIndex, commandPaletteCommands)
 	const selectedCommand = commandPaletteCommands[selectedCommandIndex] ?? null
 
+	// Keymap migration phase 2: simple cmd-id bindings move out of useKeyboard.
+	// Gated to "global mode" — no modal active, no full-view, not in filter editing —
+	// so these don't dispatch on top of modal-specific handlers below.
+	const globalKeymapActiveRef = useRef(false)
+	globalKeymapActiveRef.current = !commandPaletteActive
+		&& !openRepositoryModalActive
+		&& !labelModalActive
+		&& !commentModalActive
+		&& !commentThreadModalActive
+		&& !closeModalActive
+		&& !mergeModalActive
+		&& !themeModalActive
+		&& !diffFullView
+		&& !detailFullView
+		&& !filterMode
+	const runCommandByIdRef = useRef(runCommandById)
+	runCommandByIdRef.current = runCommandById
+	useBindings(() => ({
+		enabled: () => globalKeymapActiveRef.current,
+		bindings: [
+			{ key: "/", cmd: () => runCommandByIdRef.current("filter.open") },
+			{ key: "r", cmd: () => runCommandByIdRef.current("pull.refresh") },
+			{ key: "t", cmd: () => runCommandByIdRef.current("theme.open") },
+			{ key: "d", cmd: () => runCommandByIdRef.current("diff.open") },
+			{ key: "l", cmd: () => runCommandByIdRef.current("pull.labels") },
+			{ key: "m", cmd: () => runCommandByIdRef.current("pull.merge") },
+			{ key: "shift+m", cmd: () => runCommandByIdRef.current("pull.merge") },
+			{ key: "x", cmd: () => runCommandByIdRef.current("pull.close") },
+			{ key: "o", cmd: () => runCommandByIdRef.current("pull.open-browser") },
+			{ key: "s", cmd: () => runCommandByIdRef.current("pull.toggle-draft") },
+			{ key: "shift+s", cmd: () => runCommandByIdRef.current("pull.toggle-draft") },
+			{ key: "y", cmd: () => runCommandByIdRef.current("pull.copy-metadata") },
+			{ key: "return", cmd: () => runCommandByIdRef.current("detail.open") },
+		],
+	}), [])
+	// Always-on bindings — work even while modals are open.
+	useBindings(() => ({
+		bindings: [
+			{ key: "ctrl+p", cmd: () => runCommandByIdRef.current("command.open") },
+			{ key: "meta+k", cmd: () => runCommandByIdRef.current("command.open") },
+		],
+	}), [])
+
 	useKeyboard((key) => {
 		if (commandPaletteActive) {
 			if (key.name === "escape" || key.ctrl && key.name === "c") {
@@ -1794,11 +1838,6 @@ export const App = () => {
 				}))
 				return
 			}
-			return
-		}
-
-		if ((key.ctrl && key.name === "p") || (key.meta && key.name === "k")) {
-			runCommandById("command.open")
 			return
 		}
 
@@ -2292,21 +2331,8 @@ export const App = () => {
 			return
 		}
 
-		if (isThemeKey(key)) {
-			runCommandById("theme.open")
-			return
-		}
-
-		if (key.name === "/") {
-			runCommandById("filter.open")
-			return
-		}
 		if (key.name === "escape" && filterQuery.length > 0) {
 			runCommandById("filter.clear")
-			return
-		}
-		if (key.name === "r") {
-			runCommandById("pull.refresh")
 			return
 		}
 		if (isWideLayout && selectedPullRequest && !detailFullView && !diffFullView) {
@@ -2391,38 +2417,6 @@ export const App = () => {
 			() => setSelectedIndex(0),
 			() => setSelectedIndex(visiblePullRequests.length === 0 ? 0 : visiblePullRequests.length - 1),
 		)) return
-		if ((key.name === "return" || key.name === "enter") && !detailFullView) {
-			runCommandById("detail.open")
-			return
-		}
-		if (key.name === "d" && selectedPullRequest) {
-			runCommandById("diff.open")
-			return
-		}
-		if (key.name === "x" && selectedPullRequest?.state === "open") {
-			runCommandById("pull.close")
-			return
-		}
-		if (key.name === "l" && selectedPullRequest) {
-			runCommandById("pull.labels")
-			return
-		}
-		if (key.name === "m" || key.name === "M") {
-			if (selectedPullRequest) runCommandById("pull.merge")
-			return
-		}
-		if (key.name === "o" && selectedPullRequest) {
-			runCommandById("pull.open-browser")
-			return
-		}
-		if ((key.name === "s" || key.name === "S") && selectedPullRequest) {
-			runCommandById("pull.toggle-draft")
-			return
-		}
-		if (key.name === "y" && selectedPullRequest) {
-			runCommandById("pull.copy-metadata")
-			return
-		}
 	})
 
 	const fullscreenContentWidth = Math.max(24, contentWidth - 2)

@@ -18,14 +18,19 @@ process.env.GHUI_MOCK_REPO_COUNT = "4"
 process.env.GHUI_PR_PAGE_SIZE = "100"
 
 const loadApp = async () => {
-	const { testRender } = await import("@opentui/react/test-utils")
+	const { createTestRenderer } = await import("@opentui/core/testing")
+	const { createRoot } = await import("@opentui/react")
 	const { RegistryProvider } = await import("@effect/atom-react")
+	const { createDefaultOpenTuiKeymap } = await import("@opentui/keymap/opentui")
+	const { KeymapProvider } = await import("@opentui/keymap/react")
 	const { App } = await import("../src/App.tsx")
-	return { testRender, RegistryProvider, App }
+	return { createTestRenderer, createRoot, RegistryProvider, createDefaultOpenTuiKeymap, KeymapProvider, App }
 }
 
 let cached: Awaited<ReturnType<typeof loadApp>> | null = null
 beforeAll(async () => {
+	// @ts-expect-error — globalThis.IS_REACT_ACT_ENVIRONMENT
+	globalThis.IS_REACT_ACT_ENVIRONMENT = true
 	cached = await loadApp()
 })
 
@@ -50,8 +55,19 @@ const settle = async (
 
 const setupApp = async (cols = 100, rows = 20) => {
 	if (!cached) cached = await loadApp()
-	const { testRender, RegistryProvider, App } = cached
-	const setup = await testRender(<RegistryProvider><App /></RegistryProvider>, { width: cols, height: rows })
+	const { createTestRenderer, createRoot, RegistryProvider, createDefaultOpenTuiKeymap, KeymapProvider, App } = cached
+	const setup = await createTestRenderer({ width: cols, height: rows })
+	const keymap = createDefaultOpenTuiKeymap(setup.renderer)
+	const root = createRoot(setup.renderer)
+	act(() => {
+		root.render(
+			<RegistryProvider>
+				<KeymapProvider keymap={keymap}>
+					<App />
+				</KeymapProvider>
+			</RegistryProvider>,
+		)
+	})
 	const ready = await settle(setup.renderOnce, () => setup.captureCharFrame().includes("Mock PR"))
 	if (!ready) throw new Error("App never rendered mock PRs:\n" + setup.captureCharFrame())
 	return setup
