@@ -1882,56 +1882,102 @@ export const App = () => {
 		],
 	}), [])
 
+	// ThemeModal: nav + filter-mode toggle. j/k only navigate when not in filter mode
+	// (so users can type those letters into the query).
+	const themeModalActiveRef = useRef(false)
+	themeModalActiveRef.current = themeModalActive
+	const themeModalCtxRef = useRef({
+		filterMode: false,
+		hasResults: true,
+		closeThemeModal,
+		updateThemeQuery,
+		moveThemeSelection,
+	})
+	themeModalCtxRef.current = {
+		filterMode: themeModal.filterMode,
+		hasResults: filterThemeDefinitions(themeModal.query).length > 0,
+		closeThemeModal,
+		updateThemeQuery,
+		moveThemeSelection,
+	}
+	useBindings(() => ({
+		enabled: () => themeModalActiveRef.current,
+		bindings: [
+			{ key: "escape", cmd: () => {
+				if (themeModalCtxRef.current.filterMode) themeModalCtxRef.current.updateThemeQuery("", { filterMode: false })
+				else themeModalCtxRef.current.closeThemeModal(false)
+			} },
+			{ key: "/", cmd: () => themeModalCtxRef.current.updateThemeQuery("", { filterMode: true }) },
+			{ key: "return", cmd: () => {
+				if (themeModalCtxRef.current.filterMode && !themeModalCtxRef.current.hasResults) return
+				themeModalCtxRef.current.closeThemeModal(true)
+			} },
+			{ key: "up", cmd: () => themeModalCtxRef.current.moveThemeSelection(-1) },
+			{ key: "down", cmd: () => themeModalCtxRef.current.moveThemeSelection(1) },
+			{ key: "k", cmd: () => { if (!themeModalCtxRef.current.filterMode) themeModalCtxRef.current.moveThemeSelection(-1) } },
+			{ key: "j", cmd: () => { if (!themeModalCtxRef.current.filterMode) themeModalCtxRef.current.moveThemeSelection(1) } },
+		],
+	}), [])
+
+	// OpenRepositoryModal: escape closes, return submits.
+	const openRepositoryModalActiveRef = useRef(false)
+	openRepositoryModalActiveRef.current = openRepositoryModalActive
+	const openRepositoryFromInputRef = useRef(openRepositoryFromInput)
+	openRepositoryFromInputRef.current = openRepositoryFromInput
+	useBindings(() => ({
+		enabled: () => openRepositoryModalActiveRef.current,
+		bindings: [
+			{ key: "escape", cmd: () => closeActiveModalRef.current() },
+			{ key: "return", cmd: () => openRepositoryFromInputRef.current() },
+		],
+	}), [])
+
+	// CommandPalette: escape closes, return runs, up/k & down/j navigate.
+	const commandPaletteActiveRef = useRef(false)
+	commandPaletteActiveRef.current = commandPaletteActive
+	const commandPaletteCtxRef = useRef({
+		runSelected: () => {},
+		setCommandPalette,
+		paletteCommands: commandPaletteCommands,
+	})
+	commandPaletteCtxRef.current = {
+		runSelected: () => { if (selectedCommand) runCommand(selectedCommand, { notifyDisabled: true, closePalette: true }) },
+		setCommandPalette,
+		paletteCommands: commandPaletteCommands,
+	}
+	const moveCommandPaletteSelection = (delta: -1 | 1) => commandPaletteCtxRef.current.setCommandPalette((current) => {
+		const selectedIndex = clampCommandIndex(current.selectedIndex + delta, commandPaletteCtxRef.current.paletteCommands)
+		return selectedIndex === current.selectedIndex ? current : { ...current, selectedIndex }
+	})
+	useBindings(() => ({
+		enabled: () => commandPaletteActiveRef.current,
+		bindings: [
+			{ key: "escape", cmd: () => closeActiveModalRef.current() },
+			{ key: "ctrl+c", cmd: () => closeActiveModalRef.current() },
+			{ key: "return", cmd: () => commandPaletteCtxRef.current.runSelected() },
+			{ key: "up", cmd: () => moveCommandPaletteSelection(-1) },
+			{ key: "down", cmd: () => moveCommandPaletteSelection(1) },
+		],
+	}), [])
+
 	useKeyboard((key) => {
 		if (commandPaletteActive) {
-			if (key.name === "escape" || key.ctrl && key.name === "c") {
-				closeActiveModal()
-				return
-			}
-			if (key.name === "return" || key.name === "enter") {
-				if (selectedCommand) runCommand(selectedCommand, { notifyDisabled: true, closePalette: true })
-				return
-			}
-			if (key.name === "up" || key.name === "k" && !key.ctrl && !key.meta) {
-				setCommandPalette((current) => {
-					const selectedIndex = clampCommandIndex(current.selectedIndex - 1, commandPaletteCommands)
-					return selectedIndex === current.selectedIndex ? current : { ...current, selectedIndex }
-				})
-				return
-			}
-			if (key.name === "down" || key.name === "j" && !key.ctrl && !key.meta) {
-				setCommandPalette((current) => {
-					const selectedIndex = clampCommandIndex(current.selectedIndex + 1, commandPaletteCommands)
-					return selectedIndex === current.selectedIndex ? current : { ...current, selectedIndex }
-				})
-				return
-			}
 			if (isSingleLineInputKey(key)) {
 				setCommandPalette((current) => {
 					const query = editSingleLineInput(current.query, key) ?? current.query
 					return current.query === query && current.selectedIndex === 0 ? current : { ...current, query, selectedIndex: 0 }
 				})
-				return
 			}
 			return
 		}
 
 		if (openRepositoryModalActive) {
-			if (key.name === "escape" || key.ctrl && key.name === "c") {
-				closeActiveModal()
-				return
-			}
-			if (key.name === "return" || key.name === "enter") {
-				openRepositoryFromInput()
-				return
-			}
 			if (isSingleLineInputKey(key)) {
 				setOpenRepositoryModal((current) => ({
 					...current,
 					query: editSingleLineInput(current.query, key) ?? current.query,
 					error: null,
 				}))
-				return
 			}
 			return
 		}
@@ -1950,34 +1996,8 @@ export const App = () => {
 		}
 
 		if (themeModalActive) {
-			if (key.name === "escape") {
-				if (themeModal.filterMode) {
-					updateThemeQuery("", { filterMode: false })
-					return
-				}
-				closeThemeModal(false)
-				return
-			}
-			if (key.name === "/") {
-				updateThemeQuery("", { filterMode: true })
-				return
-			}
-			if (key.name === "return" || key.name === "enter") {
-				if (themeModal.filterMode && filterThemeDefinitions(themeModal.query).length === 0) return
-				closeThemeModal(true)
-				return
-			}
-			if (key.name === "up" || (!themeModal.filterMode && key.name === "k")) {
-				moveThemeSelection(-1)
-				return
-			}
-			if (key.name === "down" || (!themeModal.filterMode && key.name === "j")) {
-				moveThemeSelection(1)
-				return
-			}
 			if (themeModal.filterMode && isSingleLineInputKey(key)) {
 				editThemeQuery((query) => editSingleLineInput(query, key) ?? query)
-				return
 			}
 			return
 		}
