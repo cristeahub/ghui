@@ -1,5 +1,11 @@
 # @kitlangton/ghui
 
+## 0.2.0
+
+### Minor Changes
+
+- Show pull request conversation items in the details pane, default diffs to ignore whitespace-only changes, and apply optimistic merge UI updates immediately.
+
 ## 0.1.22
 
 ### Patch Changes

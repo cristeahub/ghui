@@ -1,9 +1,9 @@
 import { Data } from "effect"
-import { formatShortDate, formatTimestamp } from "../date.js"
 import type { PullRequestLabel, PullRequestMergeInfo, PullRequestReviewComment } from "../domain.js"
 import { availableMergeActions } from "../mergeActions.js"
 import { clampCursor, commentEditorLines, cursorLineIndexForLines } from "./commentEditor.js"
 import { colors, filterThemeDefinitions, themeDefinitions, type ThemeId } from "./colors.js"
+import { commentDisplayRows, CommentSegmentsLine, type CommentDisplayLine } from "./comments.js"
 import { centerCell, Filler, fitCell, HintRow, PlainLine, StandardModal, standardModalDims, TextLine } from "./primitives.js"
 import { labelColor, shortRepoName } from "./pullRequests.js"
 
@@ -484,41 +484,8 @@ export const CommentModal = ({
 	)
 }
 
-type CommentThreadRow = {
-	readonly key: string
-	readonly text: string
-	readonly fg: string
-	readonly bold?: boolean
-}
-
-const wrapCommentBody = (body: string, width: number) => {
-	const lines = body.length === 0 ? [""] : body.split("\n")
-	return lines.flatMap((line) => {
-		if (line.length === 0) return [""]
-		const wrapped: string[] = []
-		for (let index = 0; index < line.length; index += width) {
-			wrapped.push(line.slice(index, index + width))
-		}
-		return wrapped
-	})
-}
-
-const formatCommentDate = (date: Date | null) => date ? `${formatShortDate(date)} ${formatTimestamp(date)}` : ""
-
-const commentThreadRows = (comments: readonly PullRequestReviewComment[], width: number): readonly CommentThreadRow[] =>
-	comments.flatMap((comment, commentIndex) => {
-		const timestamp = formatCommentDate(comment.createdAt)
-		const header = timestamp ? `${comment.author}  ${timestamp}` : comment.author
-		return [
-			{ key: `${comment.id}:header`, text: header, fg: colors.count, bold: true },
-			...wrapCommentBody(comment.body, width).map((line, lineIndex) => ({
-				key: `${comment.id}:body:${lineIndex}`,
-				text: line,
-				fg: colors.text,
-			})),
-			...(commentIndex < comments.length - 1 ? [{ key: `${comment.id}:gap`, text: "", fg: colors.muted }] : []),
-		]
-	})
+const commentThreadRows = (comments: readonly PullRequestReviewComment[], width: number): readonly CommentDisplayLine[] =>
+	comments.flatMap((comment) => commentDisplayRows({ item: comment, width }))
 
 export const CommentThreadModal = ({
 	state,
@@ -559,9 +526,7 @@ export const CommentThreadModal = ({
 		>
 			{visibleRows.length === 0 ? (
 				<PlainLine text={fitCell("No comments on this line.", contentWidth)} fg={colors.muted} />
-			) : visibleRows.map((row) => (
-				<PlainLine key={row.key} text={fitCell(row.text, contentWidth)} fg={row.fg} bold={row.bold ?? false} />
-			))}
+			) : visibleRows.map((row) => <CommentSegmentsLine key={row.key} segments={row.segments} />)}
 		</StandardModal>
 	)
 }

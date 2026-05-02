@@ -100,7 +100,7 @@ const leftPaneRowOf = (frame: string, prNumber: number) => {
 const press = async (
 	mockInput: { pressArrow: (d: "up" | "down" | "left" | "right") => void; pressKey: (k: string, m?: { shift?: boolean }) => void },
 	renderOnce: () => Promise<void>,
-	key: { kind: "arrow"; dir: "up" | "down" } | { kind: "key"; name: string; shift?: boolean },
+	key: { kind: "arrow"; dir: "up" | "down" | "left" | "right" } | { kind: "key"; name: string; shift?: boolean },
 	settleFrames = 2,
 ) => {
 	await act(async () => {
@@ -130,6 +130,37 @@ describe("PR list scrolling", () => {
 	test("initial selection points at first PR", async () => {
 		const { captureCharFrame, renderer } = await setupApp(100, 20)
 		expect(detailPaneNumber(captureCharFrame())).toBe(numberFromIndex(0))
+		renderer.destroy()
+	})
+
+	test("details show summary and conversation in one document", async () => {
+		const { captureCharFrame, renderOnce, renderer } = await setupApp(120, 24)
+		const loaded = await settle(renderOnce, () => {
+			const frame = captureCharFrame()
+			return frame.includes("Line B") && frame.includes("Conversation") && frame.includes("Top-level discussion")
+		})
+		expect(loaded).toBe(true)
+		const frame = captureCharFrame()
+		expect(frame.indexOf("Line B")).toBeLessThan(frame.indexOf("Conversation"))
+		renderer.destroy()
+	})
+
+	test("diff arrows preserve left/right side preference across minimized context rows", async () => {
+		const { captureCharFrame, mockInput, renderOnce, renderer } = await setupApp(120, 24)
+		await press(mockInput, renderOnce, { kind: "key", name: "d" }, 4)
+		const loaded = await settle(renderOnce, () => captureCharFrame().includes("src/mockDiff.ts"))
+		expect(loaded).toBe(true)
+
+		await press(mockInput, renderOnce, { kind: "arrow", dir: "left" })
+		await press(mockInput, renderOnce, { kind: "arrow", dir: "down" })
+		expect(captureCharFrame()).toContain("← -2")
+
+		await press(mockInput, renderOnce, { kind: "arrow", dir: "down" })
+		await press(mockInput, renderOnce, { kind: "arrow", dir: "down" })
+		expect(captureCharFrame()).toContain("← -4")
+
+		await press(mockInput, renderOnce, { kind: "arrow", dir: "right" })
+		expect(captureCharFrame()).toContain("→ +4")
 		renderer.destroy()
 	})
 

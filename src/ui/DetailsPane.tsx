@@ -1,19 +1,17 @@
 import { TextAttributes } from "@opentui/core"
 import { Fragment, useMemo } from "react"
 import { formatRelativeDate } from "../date.js"
-import type { CheckItem, PullRequestItem } from "../domain.js"
+import type { CheckItem, PullRequestConversationItem, PullRequestItem } from "../domain.js"
 import { colors, type ThemeId } from "./colors.js"
-import { diffStatText } from "./diff.js"
+import { commentCountText, commentDisplayRows, commentSideColor, CommentSegmentsLine, type CommentSegment } from "./comments.js"
+import { diffCommentLineLabel, diffStatText } from "./diff.js"
 import { DiffStats } from "./diffStats.js"
 import { centerCell, Divider, Filler, fitCell, PaddedRow, PlainLine, TextLine } from "./primitives.js"
 import { labelColor, labelTextColor, reviewLabel, shortRepoName, statusColor } from "./pullRequests.js"
 
 interface PreviewLine {
-	readonly segments: ReadonlyArray<{
-		readonly text: string
-		readonly fg: string
-		readonly bold?: boolean
-	}>
+	readonly divider?: boolean
+	readonly segments: readonly CommentSegment[]
 }
 
 export interface DetailPlaceholderContent {
@@ -24,6 +22,8 @@ export interface DetailPlaceholderContent {
 export const DETAIL_BODY_LINES = 6
 export const DETAIL_PLACEHOLDER_ROWS = 4
 export const DETAIL_BODY_SCROLL_LIMIT = 1_000
+
+export type DetailConversationStatus = "idle" | "loading" | "ready"
 
 const pullRequestReferencePattern = /(#[0-9]+)/g
 const codeFencePattern = /^```\s*([a-zA-Z0-9_-]+)?/
@@ -186,6 +186,85 @@ const bodyPreview = (body: string, width: number, limit = DETAIL_BODY_LINES): Ar
 	return preview.slice(0, limit)
 }
 
+const previewDivider = (): PreviewLine => ({
+	divider: true,
+	segments: [],
+})
+
+const conversationItemGroups = (item: PullRequestConversationItem, width: number): readonly (readonly CommentSegment[])[] => {
+	if (item._tag !== "review-comment") return []
+	const locationWidth = Math.max(8, width - item.author.length - 20)
+	return [[
+		{ text: fitCell(item.path, locationWidth), fg: colors.inlineCode },
+		{ text: diffCommentLineLabel(item), fg: commentSideColor(item.side), bold: true },
+	]]
+}
+
+const conversationPreview = ({
+	items,
+	status,
+	width,
+	limit,
+}: {
+	readonly items: readonly PullRequestConversationItem[]
+	readonly status: DetailConversationStatus
+	readonly width: number
+	readonly limit: number
+}): Array<PreviewLine> => {
+	if (status === "idle" || (status === "ready" && items.length === 0) || limit <= 0) return []
+	const rows: Array<PreviewLine> = []
+	const title = "Conversation"
+	const countText = status === "loading" ? "loading" : commentCountText(items.length)
+	const gap = Math.max(2, width - title.length - countText.length)
+	rows.push({
+		segments: [
+			{ text: title, fg: colors.count, bold: true },
+			{ text: " ".repeat(gap), fg: colors.muted },
+			{ text: countText, fg: colors.muted },
+		],
+	})
+	if (items.length === 0) {
+		rows.push({ segments: [{ text: "│ ", fg: colors.muted }, { text: "Loading comments...", fg: colors.muted }] })
+		return rows.slice(0, limit)
+	}
+
+	for (const item of items) {
+		if (rows.length >= limit) break
+		rows.push(...commentDisplayRows({ item, width, groups: conversationItemGroups(item, width) }).slice(0, limit - rows.length))
+	}
+
+	return rows.slice(0, limit)
+}
+
+const detailBodyPreview = ({
+	pullRequest,
+	contentWidth,
+	limit,
+	conversationItems,
+	conversationStatus,
+}: {
+	readonly pullRequest: PullRequestItem
+	readonly contentWidth: number
+	readonly limit: number
+	readonly conversationItems: readonly PullRequestConversationItem[]
+	readonly conversationStatus: DetailConversationStatus
+}) => {
+	const summaryRows = bodyPreview(pullRequest.body, contentWidth, limit)
+	const conversationRows = conversationPreview({
+		items: conversationItems,
+		status: conversationStatus,
+		width: contentWidth,
+		limit: Math.max(0, limit - summaryRows.length - 1),
+	})
+
+	if (conversationRows.length === 0) return summaryRows
+	return [
+		...summaryRows,
+		previewDivider(),
+		...conversationRows,
+	].slice(0, limit)
+}
+
 const deduplicateChecks = (checks: readonly CheckItem[]): CheckItem[] => {
 	const seen = new Map<string, CheckItem>()
 	for (const check of checks) {
@@ -264,13 +343,38 @@ const ChecksSection = ({ checks, contentWidth }: { checks: readonly CheckItem[];
 	)
 }
 
-export const getDetailJunctionRows = (pullRequest: PullRequestItem | null, paneWidth: number, showChecks = false): readonly number[] => {
+const conversationDividerBodyRow = (pullRequest: PullRequestItem, contentWidth: number, conversationItems: readonly PullRequestConversationItem[], conversationStatus: DetailConversationStatus) => {
+	if (!pullRequest.detailLoaded) return null
+	const summaryRows = bodyPreview(pullRequest.body, contentWidth, DETAIL_BODY_SCROLL_LIMIT)
+	const conversationRows = conversationPreview({
+		items: conversationItems,
+		status: conversationStatus,
+		width: contentWidth,
+		limit: Math.max(0, DETAIL_BODY_SCROLL_LIMIT - summaryRows.length - 1),
+	})
+	return conversationRows.length > 0 ? summaryRows.length : null
+}
+
+export const getDetailJunctionRows = (
+	pullRequest: PullRequestItem | null,
+	paneWidth: number,
+	showChecks = false,
+	contentWidth = Math.max(1, paneWidth - 2),
+	conversationItems: readonly PullRequestConversationItem[] = [],
+	conversationStatus: DetailConversationStatus = "idle",
+): readonly number[] => {
 	if (!pullRequest) return [DETAIL_PLACEHOLDER_ROWS]
 	const titleLines = wrapText(pullRequest.title, Math.max(1, paneWidth - 2)).length
 	const detailDividerRow = 1 + titleLines + 1
 	const checks = deduplicateChecks(pullRequest.checks)
 	const checksDividerRow = checks.length > 0 ? detailDividerRow + 1 + checksRowCount(checks) + 1 : -1
-	return showChecks && checks.length > 0 ? [detailDividerRow, checksDividerRow] : [detailDividerRow]
+	const headerHeight = getDetailHeaderHeight(pullRequest, paneWidth, showChecks)
+	const conversationDivider = conversationDividerBodyRow(pullRequest, contentWidth, conversationItems, conversationStatus)
+	return [
+		detailDividerRow,
+		showChecks && checks.length > 0 ? checksDividerRow : -1,
+		conversationDivider === null ? -1 : headerHeight + conversationDivider,
+	].filter((row) => row >= 0)
 }
 
 export const getDetailHeaderHeight = (pullRequest: PullRequestItem | null, paneWidth: number, showChecks = false) => {
@@ -281,14 +385,14 @@ export const getDetailHeaderHeight = (pullRequest: PullRequestItem | null, paneW
 	return titleLines + 3 + checksHeight
 }
 
-export const getDetailBodyHeight = (pullRequest: PullRequestItem | null, contentWidth: number, bodyLines = DETAIL_BODY_LINES) => {
+export const getDetailBodyHeight = (pullRequest: PullRequestItem | null, contentWidth: number, bodyLines = DETAIL_BODY_LINES, conversationItems: readonly PullRequestConversationItem[] = [], conversationStatus: DetailConversationStatus = "idle") => {
 	if (!pullRequest) return bodyLines
 	if (!pullRequest.detailLoaded) return bodyLines
-	return bodyPreview(pullRequest.body, contentWidth, bodyLines).length
+	return detailBodyPreview({ pullRequest, contentWidth, limit: bodyLines, conversationItems, conversationStatus }).length
 }
 
-export const getScrollableDetailBodyHeight = (pullRequest: PullRequestItem | null, contentWidth: number) => {
-	return getDetailBodyHeight(pullRequest, contentWidth, DETAIL_BODY_SCROLL_LIMIT)
+export const getScrollableDetailBodyHeight = (pullRequest: PullRequestItem | null, contentWidth: number, conversationItems: readonly PullRequestConversationItem[] = [], conversationStatus: DetailConversationStatus = "idle") => {
+	return getDetailBodyHeight(pullRequest, contentWidth, DETAIL_BODY_SCROLL_LIMIT, conversationItems, conversationStatus)
 }
 
 export const getDetailsPaneHeight = ({
@@ -297,14 +401,18 @@ export const getDetailsPaneHeight = ({
 	bodyLines = DETAIL_BODY_LINES,
 	paneWidth = contentWidth + 2,
 	showChecks = false,
+	conversationItems = [],
+	conversationStatus = "idle",
 }: {
 	pullRequest: PullRequestItem | null
 	contentWidth: number
 	bodyLines?: number
 	paneWidth?: number
 	showChecks?: boolean
+	conversationItems?: readonly PullRequestConversationItem[]
+	conversationStatus?: DetailConversationStatus
 }) => pullRequest
-	? getDetailHeaderHeight(pullRequest, paneWidth, showChecks) + getDetailBodyHeight(pullRequest, contentWidth, bodyLines)
+	? getDetailHeaderHeight(pullRequest, paneWidth, showChecks) + getDetailBodyHeight(pullRequest, contentWidth, bodyLines, conversationItems, conversationStatus)
 	: bodyLines + DETAIL_PLACEHOLDER_ROWS + 1
 
 export const DetailHeader = ({
@@ -394,21 +502,27 @@ export const DetailHeader = ({
 export const DetailBody = ({
 	pullRequest,
 	contentWidth,
+	paneWidth = contentWidth + 2,
 	bodyLines = DETAIL_BODY_LINES,
 	bodyLineLimit = bodyLines,
+	conversationItems = [],
+	conversationStatus = "idle",
 	loadingIndicator,
 	themeId,
 }: {
 	pullRequest: PullRequestItem
 	contentWidth: number
+	paneWidth?: number
 	bodyLines?: number
 	bodyLineLimit?: number
+	conversationItems?: readonly PullRequestConversationItem[]
+	conversationStatus?: DetailConversationStatus
 	loadingIndicator: string
 	themeId: ThemeId
 }) => {
 	const previewLines = useMemo(
-		() => bodyPreview(pullRequest.body, contentWidth, bodyLineLimit),
-		[pullRequest.body, contentWidth, bodyLineLimit, themeId],
+		() => detailBodyPreview({ pullRequest, contentWidth, limit: bodyLineLimit, conversationItems, conversationStatus }),
+		[pullRequest, contentWidth, bodyLineLimit, conversationItems, conversationStatus, themeId],
 	)
 
 	if (!pullRequest.detailLoaded) {
@@ -424,21 +538,15 @@ export const DetailBody = ({
 	}
 
 	return (
-		<box flexDirection="column" paddingLeft={1} paddingRight={1} height={previewLines.length}>
+		<box flexDirection="column" height={previewLines.length}>
 			{previewLines.map((line, index) => (
-				<TextLine key={`${pullRequest.url}-${index}`}>
-					{line.segments.map((segment, segmentIndex) => (
-						("bold" in segment && segment.bold === true) ? (
-							<span key={segmentIndex} fg={segment.fg} attributes={TextAttributes.BOLD}>
-								{segment.text}
-							</span>
-						) : (
-							<span key={segmentIndex} fg={segment.fg}>
-								{segment.text}
-							</span>
-						)
-					))}
-				</TextLine>
+				line.divider === true ? (
+					<Divider key={`${pullRequest.url}-${index}`} width={paneWidth} />
+				) : (
+					<PaddedRow key={`${pullRequest.url}-${index}`}>
+						<CommentSegmentsLine segments={line.segments} />
+					</PaddedRow>
+				)
 			))}
 		</box>
 	)
@@ -499,6 +607,8 @@ export const DetailsPane = ({
 	bodyLineLimit = bodyLines,
 	paneWidth = contentWidth + 2,
 	showChecks = false,
+	conversationItems = [],
+	conversationStatus = "idle",
 	placeholderContent,
 	loadingIndicator,
 	themeId,
@@ -510,18 +620,20 @@ export const DetailsPane = ({
 	bodyLineLimit?: number
 	paneWidth?: number
 	showChecks?: boolean
+	conversationItems?: readonly PullRequestConversationItem[]
+	conversationStatus?: DetailConversationStatus
 	placeholderContent: DetailPlaceholderContent
 	loadingIndicator: string
 	themeId: ThemeId
 }) => {
-	const contentHeight = getDetailsPaneHeight({ pullRequest, contentWidth, bodyLines: bodyLineLimit, paneWidth, showChecks })
+	const contentHeight = getDetailsPaneHeight({ pullRequest, contentWidth, bodyLines: bodyLineLimit, paneWidth, showChecks, conversationItems, conversationStatus })
 
 	return (
 		<box flexDirection="column" height={contentHeight}>
 			{pullRequest ? (
 				<>
 					<DetailHeader pullRequest={pullRequest} viewerUsername={viewerUsername} contentWidth={contentWidth} paneWidth={paneWidth} showChecks={showChecks} />
-					<DetailBody pullRequest={pullRequest} contentWidth={contentWidth} bodyLines={bodyLines} bodyLineLimit={bodyLineLimit} loadingIndicator={loadingIndicator} themeId={themeId} />
+					<DetailBody pullRequest={pullRequest} contentWidth={contentWidth} paneWidth={paneWidth} bodyLines={bodyLines} bodyLineLimit={bodyLineLimit} conversationItems={conversationItems} conversationStatus={conversationStatus} loadingIndicator={loadingIndicator} themeId={themeId} />
 				</>
 			) : (
 				<>

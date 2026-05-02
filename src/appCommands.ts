@@ -1,12 +1,12 @@
 import type { AppCommand } from "./commands.js"
 import { defineCommand } from "./commands.js"
 import type { LoadStatus, PullRequestItem } from "./domain.js"
-import type { DiffView, DiffWrapMode } from "./ui/diff.js"
+import type { DiffView, DiffWhitespaceMode, DiffWrapMode } from "./ui/diff.js"
 import { type PullRequestView, viewEquals, viewLabel, viewMode } from "./pullRequestViews.js"
 
 interface AppCommandActions {
 	readonly openCommandPalette: () => void
-	readonly refreshPullRequests: (message?: string) => void
+	readonly refreshPullRequests: (message?: string, options?: { readonly resetTransientState?: boolean }) => void
 	readonly openFilter: () => void
 	readonly clearFilter: () => void
 	readonly openThemeModal: () => void
@@ -20,6 +20,7 @@ interface AppCommandActions {
 	readonly reloadDiff: () => void
 	readonly toggleDiffRenderView: () => void
 	readonly toggleDiffWrapMode: () => void
+	readonly toggleDiffWhitespaceMode: () => void
 	readonly jumpDiffFile: (delta: 1 | -1) => void
 	readonly openSelectedDiffComment: () => void
 	readonly toggleDiffCommentRange: () => void
@@ -50,6 +51,7 @@ interface BuildAppCommandsInput {
 	readonly diffReady: boolean
 	readonly effectiveDiffRenderView: DiffView
 	readonly diffWrapMode: DiffWrapMode
+	readonly diffWhitespaceMode: DiffWhitespaceMode
 	readonly readyDiffFileCount: number
 	readonly diffFileIndex: number
 	readonly diffRangeActive: boolean
@@ -75,6 +77,7 @@ export const buildAppCommands = ({
 	diffReady,
 	effectiveDiffRenderView,
 	diffWrapMode,
+	diffWhitespaceMode,
 	readyDiffFileCount,
 	diffFileIndex,
 	diffRangeActive,
@@ -128,7 +131,7 @@ export const buildAppCommands = ({
 			subtitle: "Fetch the latest queue from GitHub",
 			shortcut: "r",
 			keywords: ["reload", "sync"],
-			run: () => actions.refreshPullRequests("Refreshed"),
+			run: () => actions.refreshPullRequests("Refreshed", { resetTransientState: true }),
 		}),
 		defineCommand({
 			id: "filter.open",
@@ -201,7 +204,7 @@ export const buildAppCommands = ({
 		}),
 		forSelected({
 			id: "diff.open",
-			title: "Open stacked diff",
+			title: "Open diff",
 			scope: "Diff",
 			shortcut: "d",
 			keywords: ["files", "patch"],
@@ -243,6 +246,15 @@ export const buildAppCommands = ({
 			shortcut: "w",
 			disabledReason: diffFullView ? null : "Open a diff first.",
 			run: actions.toggleDiffWrapMode,
+		}),
+		defineCommand({
+			id: "diff.toggle-whitespace",
+			title: diffWhitespaceMode === "ignore" ? "Show whitespace changes" : "Ignore whitespace changes",
+			scope: "Diff",
+			subtitle: diffWhitespaceMode === "ignore" ? "Display the original GitHub patch" : "Hide whitespace-only line changes",
+			disabledReason: diffFullView ? null : "Open a diff first.",
+			keywords: ["whitespace", "spacing", "ignore", "show"],
+			run: actions.toggleDiffWhitespaceMode,
 		}),
 		defineCommand({
 			id: "diff.next-file",

@@ -13,7 +13,7 @@ import { buildAppCommands } from "./appCommands.js"
 import type { AppCommand } from "./commands.js"
 import { clampCommandIndex, commandEnabled, defineCommand, filterCommands, sortCommandsByScope } from "./commands.js"
 import { config } from "./config.js"
-import { type CreatePullRequestCommentInput, type DiffCommentSide, type ListPullRequestPageInput, type LoadStatus, type PullRequestItem, type PullRequestLabel, type PullRequestMergeAction, type PullRequestReviewComment } from "./domain.js"
+import { type CreatePullRequestCommentInput, type DiffCommentSide, type ListPullRequestPageInput, type LoadStatus, type PullRequestConversationItem, type PullRequestItem, type PullRequestLabel, type PullRequestMergeAction, type PullRequestReviewComment } from "./domain.js"
 import { formatShortDate, formatTimestamp } from "./date.js"
 import { errorMessage } from "./errors.js"
 import { availableMergeActions, mergeInfoFromPullRequest } from "./mergeActions.js"
@@ -24,12 +24,13 @@ import { BrowserOpener } from "./services/BrowserOpener.js"
 import { Clipboard } from "./services/Clipboard.js"
 import { CommandRunner } from "./services/CommandRunner.js"
 import { GitHubService } from "./services/GitHubService.js"
-import { loadStoredThemeId, saveStoredThemeId } from "./themeStore.js"
+import { loadStoredDiffWhitespaceMode, loadStoredThemeId, saveStoredDiffWhitespaceMode, saveStoredThemeId } from "./themeStore.js"
 import { colors, filterThemeDefinitions, mixHex, setActiveTheme, themeDefinitions, type ThemeId } from "./ui/colors.js"
 import { backspace as editorBackspace, deleteForward as editorDeleteForward, deleteToLineEnd, deleteToLineStart, deleteWordBackward, deleteWordForward, insertText, moveLeft as editorMoveLeft, moveLineEnd, moveLineStart, moveRight as editorMoveRight, moveVertically, moveWordBackward, moveWordForward, type CommentEditorValue } from "./ui/commentEditor.js"
-import { buildStackedDiffFiles, diffCommentAnchorLabel, diffCommentLineLabel, diffCommentLocationKey, diffCommentSideLabel, getStackedDiffCommentAnchors, PullRequestDiffState, pullRequestDiffKey, safeDiffFileIndex, scrollTopForVisibleLine, splitPatchFiles, stackedDiffFileAtLine, type DiffCommentAnchor, type DiffCommentKind, type DiffView, type DiffWrapMode, type StackedDiffCommentAnchor } from "./ui/diff.js"
-import { DETAIL_BODY_SCROLL_LIMIT, DetailBody, DetailHeader, DetailPlaceholder, DetailsPane, getDetailHeaderHeight, getDetailJunctionRows, getScrollableDetailBodyHeight, LoadingPane, type DetailPlaceholderContent } from "./ui/DetailsPane.js"
+import { buildStackedDiffFiles, diffAnchorOnSide, diffCommentAnchorLabel, diffCommentLineLabel, diffCommentLocationKey, diffCommentSideLabel, getStackedDiffCommentAnchors, minimizeWhitespaceDiffFiles, PullRequestDiffState, pullRequestDiffKey, safeDiffFileIndex, scrollTopForVisibleLine, splitPatchFiles, stackedDiffFileIndexAtLine, type DiffCommentAnchor, type DiffCommentKind, type DiffView, type DiffWhitespaceMode, type DiffWrapMode, type StackedDiffCommentAnchor, verticalDiffAnchor } from "./ui/diff.js"
+import { DETAIL_BODY_SCROLL_LIMIT, DetailBody, DetailHeader, DetailPlaceholder, DetailsPane, getDetailHeaderHeight, getDetailJunctionRows, getScrollableDetailBodyHeight, LoadingPane, type DetailConversationStatus, type DetailPlaceholderContent } from "./ui/DetailsPane.js"
 import { FooterHints, initialRetryProgress, RetryProgress } from "./ui/FooterHints.js"
+import { LoadingLogoPane } from "./ui/LoadingLogo.js"
 import { Divider, fitCell, PlainLine, SeparatorColumn } from "./ui/primitives.js"
 import { CommandPalette } from "./ui/CommandPalette.js"
 import { CloseModal, CommentModal, CommentThreadModal, filterLabels, initialCloseModalState, initialCommandPaletteState, initialCommentModalState, initialCommentThreadModalState, initialLabelModalState, initialMergeModalState, initialModal, initialOpenRepositoryModalState, initialThemeModalState, LabelModal, MergeModal, Modal, OpenRepositoryModal, ThemeModal, type CloseModalState, type CommandPaletteState, type CommentModalState, type CommentThreadModalState, type LabelModalState, type MergeModalState, type ModalState, type ModalTag, type OpenRepositoryModalState, type ThemeModalState } from "./ui/modals.js"
@@ -37,6 +38,7 @@ import { groupBy, reviewLabel } from "./ui/pullRequests.js"
 import { PullRequestDiffPane } from "./ui/PullRequestDiffPane.js"
 import { buildPullRequestListRows, pullRequestListRowIndex, PullRequestList } from "./ui/PullRequestList.js"
 import { editSingleLineInput, isSingleLineInputKey, printableKeyText, singleLineText } from "./ui/singleLineInput.js"
+import { SPINNER_FRAMES } from "./ui/spinner.js"
 
 const parseOptionalPositiveInt = (value: string | undefined, fallback: number | null) => {
 	if (value === undefined) return fallback
@@ -56,7 +58,10 @@ const githubRuntime = Atom.runtime(
 		Layer.provideMerge(Observability.layer),
 	),
 )
-const initialThemeId = await Effect.runPromise(loadStoredThemeId)
+const [initialThemeId, initialDiffWhitespaceMode] = await Promise.all([
+	Effect.runPromise(loadStoredThemeId),
+	Effect.runPromise(loadStoredDiffWhitespaceMode),
+])
 
 interface PullRequestLoad {
 	readonly view: PullRequestView
@@ -113,7 +118,6 @@ const FOCUS_RETURN_REFRESH_MIN_MS = 60_000
 const FOCUSED_IDLE_REFRESH_MS = 5 * 60_000
 const AUTO_REFRESH_JITTER_MS = 10_000
 const DIFF_STICKY_HEADER_LINES = 2
-const LOADING_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"] as const
 const MAX_REPOSITORY_CACHE_ENTRIES = 8
 const LOAD_MORE_SELECTION_THRESHOLD = 8
 const LOAD_MORE_SCROLL_THRESHOLD = 3
@@ -192,10 +196,14 @@ const diffFileIndexAtom = Atom.make(0)
 const diffScrollTopAtom = Atom.make(0)
 const diffRenderViewAtom = Atom.make<DiffView>("split")
 const diffWrapModeAtom = Atom.make<DiffWrapMode>("none")
+const diffWhitespaceModeAtom = Atom.make<DiffWhitespaceMode>(initialDiffWhitespaceMode)
 const diffCommentAnchorIndexAtom = Atom.make(0)
+const diffPreferredSideAtom = Atom.make<DiffCommentSide | null>(null)
 const diffCommentRangeStartIndexAtom = Atom.make<number | null>(null)
 const diffCommentThreadsAtom = Atom.make<Record<string, readonly PullRequestReviewComment[]>>({}).pipe(Atom.keepAlive)
 const diffCommentsLoadedAtom = Atom.make<Record<string, "loading" | "ready">>({}).pipe(Atom.keepAlive)
+const pullRequestConversationAtom = Atom.make<Record<string, readonly PullRequestConversationItem[]>>({}).pipe(Atom.keepAlive)
+const pullRequestConversationLoadedAtom = Atom.make<Record<string, "loading" | "ready">>({}).pipe(Atom.keepAlive)
 const pullRequestDiffCacheAtom = Atom.make<Record<string, PullRequestDiffState>>({}).pipe(Atom.keepAlive)
 
 const activeModalAtom = Atom.make<Modal>(initialModal)
@@ -328,6 +336,9 @@ const pullRequestDiffAtom = Atom.family((key: string) => {
 })
 const listPullRequestCommentsAtom = githubRuntime.fn<{ readonly repository: string; readonly number: number }>()((input) =>
 	GitHubService.use((github) => github.listPullRequestComments(input.repository, input.number))
+)
+const listPullRequestConversationAtom = githubRuntime.fn<{ readonly repository: string; readonly number: number }>()((input) =>
+	GitHubService.use((github) => github.listPullRequestConversation(input.repository, input.number))
 )
 const getPullRequestMergeInfoAtom = githubRuntime.fn<{ readonly repository: string; readonly number: number }>()((input) =>
 	GitHubService.use((github) => github.getPullRequestMergeInfo(input.repository, input.number))
@@ -531,10 +542,14 @@ export const App = () => {
 	const [diffScrollTop, setDiffScrollTop] = useAtom(diffScrollTopAtom)
 	const [diffRenderView, setDiffRenderView] = useAtom(diffRenderViewAtom)
 	const [diffWrapMode, setDiffWrapMode] = useAtom(diffWrapModeAtom)
+	const [diffWhitespaceMode, setDiffWhitespaceMode] = useAtom(diffWhitespaceModeAtom)
 	const [diffCommentAnchorIndex, setDiffCommentAnchorIndex] = useAtom(diffCommentAnchorIndexAtom)
+	const [diffPreferredSide, setDiffPreferredSide] = useAtom(diffPreferredSideAtom)
 	const [diffCommentRangeStartIndex, setDiffCommentRangeStartIndex] = useAtom(diffCommentRangeStartIndexAtom)
 	const [diffCommentThreads, setDiffCommentThreads] = useAtom(diffCommentThreadsAtom)
 	const setDiffCommentsLoaded = useAtomSet(diffCommentsLoadedAtom)
+	const setPullRequestConversation = useAtomSet(pullRequestConversationAtom)
+	const setPullRequestConversationLoaded = useAtomSet(pullRequestConversationLoadedAtom)
 	const setPullRequestDiffCache = useAtomSet(pullRequestDiffCacheAtom)
 	const [activeModal, setActiveModal] = useAtom(activeModalAtom)
 	const [themeId, setThemeId] = useAtom(themeIdAtom)
@@ -586,6 +601,7 @@ export const App = () => {
 	const [refreshCompletionMessage, setRefreshCompletionMessage] = useState<string | null>(null)
 	const [refreshStartedAt, setRefreshStartedAt] = useState<number | null>(null)
 	const [terminalFocused, setTerminalFocused] = useState(true)
+	const [startupLoadComplete, setStartupLoadComplete] = useState(false)
 	const [loadingMoreKey, setLoadingMoreKey] = useState<string | null>(null)
 	const usernameResult = useAtomValue(usernameAtom)
 	const loadRepoLabels = useAtomSet(listRepoLabelsAtom, { mode: "promise" })
@@ -594,6 +610,7 @@ export const App = () => {
 	const removePullRequestLabel = useAtomSet(removePullRequestLabelAtom, { mode: "promise" })
 	const toggleDraftStatus = useAtomSet(toggleDraftAtom, { mode: "promise" })
 	const listPullRequestComments = useAtomSet(listPullRequestCommentsAtom, { mode: "promise" })
+	const listPullRequestConversation = useAtomSet(listPullRequestConversationAtom, { mode: "promise" })
 	const getPullRequestMergeInfo = useAtomSet(getPullRequestMergeInfoAtom, { mode: "promise" })
 	const mergePullRequest = useAtomSet(mergePullRequestAtom, { mode: "promise" })
 	const closePullRequest = useAtomSet(closePullRequestAtom, { mode: "promise" })
@@ -623,7 +640,7 @@ export const App = () => {
 	const terminalFocusedRef = useRef(true)
 	const terminalWasBlurredRef = useRef(false)
 	const pullRequestStatusRef = useRef<LoadStatus>("loading")
-	const refreshPullRequestsRef = useRef<(message?: string) => void>(() => {})
+	const refreshPullRequestsRef = useRef<(message?: string, options?: { readonly resetTransientState?: boolean }) => void>(() => {})
 	const maybeRefreshPullRequestsRef = useRef<(minimumAgeMs: number) => void>(() => {})
 	const detailScrollRef = useRef<ScrollBoxRenderable | null>(null)
 	const detailPreviewScrollRef = useRef<ScrollBoxRenderable | null>(null)
@@ -665,7 +682,7 @@ export const App = () => {
 	const pullRequestLoad = useAtomValue(pullRequestLoadAtom)
 	const pullRequests = useAtomValue(displayedPullRequestsAtom)
 	const pullRequestStatus = useAtomValue(pullRequestStatusAtom)
-	const isInitialLoading = pullRequestStatus === "loading" && pullRequests.length === 0
+	const isInitialLoading = !startupLoadComplete && pullRequestStatus === "loading" && pullRequests.length === 0
 	const pullRequestError = AsyncResult.isFailure(pullRequestResult) ? errorMessage(Cause.squash(pullRequestResult.cause)) : null
 	const username = AsyncResult.isSuccess(usernameResult) ? usernameResult.value : null
 	pullRequestStatusRef.current = pullRequestStatus
@@ -675,6 +692,8 @@ export const App = () => {
 	const visibleGroups = useAtomValue(visibleGroupsAtom)
 	const visiblePullRequests = useAtomValue(visiblePullRequestsAtom)
 	const selectedPullRequest = useAtomValue(selectedPullRequestAtom)
+	const pullRequestConversation = useAtomValue(pullRequestConversationAtom)
+	const pullRequestConversationLoaded = useAtomValue(pullRequestConversationLoadedAtom)
 	const selectedRepository = viewRepository(activeView)
 	const activeViews = activePullRequestViews(activeView)
 	const currentQueueCacheKey = viewCacheKey(activeView)
@@ -693,9 +712,22 @@ export const App = () => {
 	}), [visibleGroups, pullRequestStatus, pullRequestError, visibleFilterText, filterMode, filterQuery, loadedPullRequestCount, hasMorePullRequests, isLoadingMorePullRequests])
 	const selectedPullRequestRowIndex = pullRequestListRowIndex(pullRequestListRows, selectedPullRequest?.url ?? null)
 	const selectedDiffKey = useAtomValue(selectedDiffKeyAtom)
+	const selectedConversationItems = selectedDiffKey ? pullRequestConversation[selectedDiffKey] ?? [] : []
+	const selectedConversationStatus: DetailConversationStatus = selectedDiffKey ? pullRequestConversationLoaded[selectedDiffKey] ?? "idle" : "idle"
 	const selectedDiffState = useAtomValue(selectedDiffStateAtom)
 	const effectiveDiffRenderView = contentWidth >= 100 ? diffRenderView : "unified"
-	const readyDiffFiles = selectedDiffState?._tag === "Ready" ? selectedDiffState.files : []
+	const readyDiffFiles = useMemo(
+		() => selectedDiffState?._tag === "Ready"
+			? diffWhitespaceMode === "ignore" ? minimizeWhitespaceDiffFiles(selectedDiffState.files) : selectedDiffState.files
+			: [],
+		[selectedDiffState, diffWhitespaceMode],
+	)
+	const displayedDiffState = useMemo(
+		() => selectedDiffState?._tag === "Ready"
+			? PullRequestDiffState.Ready({ patch: readyDiffFiles.map((file) => file.patch).join("\n"), files: readyDiffFiles })
+			: selectedDiffState,
+		[selectedDiffState, readyDiffFiles],
+	)
 	const stackedDiffFiles = useMemo(() => buildStackedDiffFiles(readyDiffFiles, effectiveDiffRenderView, diffWrapMode, contentWidth), [readyDiffFiles, effectiveDiffRenderView, diffWrapMode, contentWidth])
 	const diffCommentAnchors = useMemo(
 		() => diffFullView ? getStackedDiffCommentAnchors(stackedDiffFiles, effectiveDiffRenderView, diffWrapMode, contentWidth) : [],
@@ -766,12 +798,36 @@ export const App = () => {
 		if (!pullRequest) return
 		setPullRequestOverrides((current) => ({ ...current, [url]: transform(pullRequest) }))
 	}
-	const refreshPullRequests = (message?: string) => {
+	const markPullRequestCompleted = (pullRequest: PullRequestItem, state: "closed" | "merged") => {
+		setRecentlyCompletedPullRequests((current) => ({
+			...current,
+			[pullRequest.url]: {
+				...pullRequest,
+				state,
+				autoMergeEnabled: false,
+			},
+		}))
+	}
+	const restoreOptimisticPullRequest = (pullRequest: PullRequestItem) => {
+		setRecentlyCompletedPullRequests((current) => {
+			if (!(pullRequest.url in current)) return current
+			const next = { ...current }
+			delete next[pullRequest.url]
+			return next
+		})
+		updatePullRequest(pullRequest.url, () => pullRequest)
+	}
+	const refreshPullRequests = (message?: string, options: { readonly resetTransientState?: boolean } = {}) => {
 		refreshGenerationRef.current += 1
 		detailHydrationRef.current.clear()
 		if (detailPrefetchTimeoutRef.current !== null) clearTimeout(detailPrefetchTimeoutRef.current)
 		setLoadingMoreKey(null)
 		setPullRequestOverrides({})
+		if (options.resetTransientState) {
+			setRecentlyCompletedPullRequests({})
+			setPullRequestConversation({})
+			setPullRequestConversationLoaded({})
+		}
 		if (message) {
 			setNotice(null)
 			setRefreshCompletionMessage(message)
@@ -873,6 +929,29 @@ export const App = () => {
 			if (detailHydrationRef.current.get(detailKey) === entry) detailHydrationRef.current.delete(detailKey)
 		})
 		return true
+	}
+	const loadPullRequestConversation = (pullRequest: PullRequestItem, force = false) => {
+		const key = pullRequestDiffKey(pullRequest)
+		const previousLoadState = registry.get(pullRequestConversationLoadedAtom)[key]
+		if (!force && previousLoadState) return
+		const generation = refreshGenerationRef.current
+		setPullRequestConversationLoaded((current) => ({ ...current, [key]: "loading" }))
+		void listPullRequestConversation({ repository: pullRequest.repository, number: pullRequest.number })
+			.then((items) => {
+				if (generation !== refreshGenerationRef.current) return
+				setPullRequestConversation((current) => ({ ...current, [key]: items }))
+				setPullRequestConversationLoaded((current) => ({ ...current, [key]: "ready" }))
+			})
+			.catch((error) => {
+				if (generation !== refreshGenerationRef.current) return
+				setPullRequestConversationLoaded((current) => {
+					if (previousLoadState === "ready") return { ...current, [key]: previousLoadState }
+					const next = { ...current }
+					delete next[key]
+					return next
+				})
+				flashNotice(errorMessage(error))
+			})
 	}
 	maybeRefreshPullRequestsRef.current = (minimumAgeMs) => {
 		if (!terminalFocusedRef.current || pullRequestStatusRef.current === "loading") return
@@ -989,9 +1068,14 @@ export const App = () => {
 		setDiffFileIndex(0)
 		setDiffScrollTop(0)
 		setDiffCommentAnchorIndex(0)
+		setDiffPreferredSide(null)
 		setDiffCommentRangeStartIndex(null)
 		detailPreviewScrollRef.current?.scrollTo({ x: 0, y: 0 })
 	}, [selectedIndex])
+
+	useEffect(() => {
+		setDiffFileIndex((current) => safeDiffFileIndex(readyDiffFiles, current))
+	}, [readyDiffFiles.length])
 
 	useEffect(() => {
 		setDiffCommentAnchorIndex((current) => {
@@ -1065,20 +1149,34 @@ export const App = () => {
 	const isHydratingPullRequestDetails = pullRequestStatus === "ready" && selectedPullRequest?.state === "open" && !selectedPullRequest.detailLoaded
 	const isRefreshingPullRequests = pullRequestResult.waiting && pullRequestLoad !== null
 	const hasActiveLoadingIndicator = pullRequestResult.waiting || isHydratingPullRequestDetails || isLoadingMorePullRequests || labelModal.loading || closeModal.running || mergeModal.loading || mergeModal.running || selectedDiffState?._tag === "Loading"
-	const loadingIndicator = LOADING_FRAMES[loadingFrame % LOADING_FRAMES.length]!
+	const loadingIndicator = SPINNER_FRAMES[loadingFrame % SPINNER_FRAMES.length]!
 
 	useEffect(() => {
 		if (!hasActiveLoadingIndicator) return
 		const interval = globalThis.setInterval(() => {
-			setLoadingFrame((current) => (current + 1) % LOADING_FRAMES.length)
+			setLoadingFrame((current) => current + 1)
 		}, 120)
 		return () => globalThis.clearInterval(interval)
 	}, [hasActiveLoadingIndicator])
 
 	useEffect(() => {
+		if (isInitialLoading) setLoadingFrame(0)
+	}, [isInitialLoading])
+
+	useEffect(() => {
+		if (startupLoadComplete || pullRequestStatus === "loading") return
+		setStartupLoadComplete(true)
+	}, [startupLoadComplete, pullRequestStatus])
+
+	useEffect(() => {
 		if (pullRequestStatus !== "ready" || !selectedPullRequest) return
 		hydratePullRequestDetails(selectedPullRequest, true)
 	}, [pullRequestStatus, selectedPullRequest?.url, selectedPullRequest?.headRefOid, selectedPullRequest?.state, selectedPullRequest?.detailLoaded, selectedPullRequest?.repository, selectedPullRequest?.number])
+
+	useEffect(() => {
+		if (pullRequestStatus !== "ready" || !selectedPullRequest) return
+		loadPullRequestConversation(selectedPullRequest)
+	}, [pullRequestStatus, selectedPullRequest?.url, selectedPullRequest?.headRefOid, selectedPullRequest?.repository, selectedPullRequest?.number])
 
 	useEffect(() => {
 		if (detailPrefetchTimeoutRef.current !== null) clearTimeout(detailPrefetchTimeoutRef.current)
@@ -1113,7 +1211,7 @@ export const App = () => {
 		title: `${loadingIndicator} Loading pull request details`,
 		hint: `${selectedPullRequest.repository} #${selectedPullRequest.number}`,
 	} : detailPlaceholderContent
-	const detailJunctions = isSelectedPullRequestDetailLoading ? [] : getDetailJunctionRows(selectedPullRequest, rightPaneWidth, true)
+	const detailJunctions = isSelectedPullRequestDetailLoading ? [] : getDetailJunctionRows(selectedPullRequest, rightPaneWidth, true, rightContentWidth, selectedConversationItems, selectedConversationStatus)
 
 	const halfPage = Math.max(1, Math.floor(wideBodyHeight / 2))
 
@@ -1210,6 +1308,7 @@ export const App = () => {
 		setDiffFileIndex(0)
 		setDiffScrollTop(0)
 		setDiffCommentAnchorIndex(0)
+		setDiffPreferredSide(null)
 		setDiffCommentRangeStartIndex(null)
 		setDiffRenderView(contentWidth >= 100 ? "split" : "unified")
 		diffScrollRef.current?.scrollTo({ x: 0, y: 0 })
@@ -1231,7 +1330,7 @@ export const App = () => {
 		const scrollTop = diffScrollRef.current?.scrollTop
 		if (scrollTop === undefined || stackedDiffFiles.length === 0) return
 		setDiffScrollTop((current) => current === scrollTop ? current : scrollTop)
-		const nextIndex = stackedDiffFileAtLine(stackedDiffFiles, scrollTop)?.index ?? 0
+		const nextIndex = Math.max(0, stackedDiffFileIndexAtLine(stackedDiffFiles, scrollTop))
 		setDiffFileIndex((current) => current === nextIndex ? current : nextIndex)
 	}
 
@@ -1260,7 +1359,8 @@ export const App = () => {
 		const nextIndex = safeDiffFileIndex(readyDiffFiles, diffFileIndex + delta)
 		setDiffFileIndex(nextIndex)
 		setDiffCommentRangeStartIndex(null)
-		const nextAnchor = diffCommentAnchors.find((anchor) => anchor.fileIndex === nextIndex && anchor.side === selectedDiffCommentAnchor?.side)
+		const targetSide = diffPreferredSide ?? selectedDiffCommentAnchor?.side
+		const nextAnchor = diffCommentAnchors.find((anchor) => anchor.fileIndex === nextIndex && anchor.side === targetSide)
 			?? diffCommentAnchors.find((anchor) => anchor.fileIndex === nextIndex)
 		if (nextAnchor) setDiffCommentAnchorIndex(diffCommentAnchors.indexOf(nextAnchor))
 		scrollToDiffFile(nextIndex)
@@ -1273,13 +1373,8 @@ export const App = () => {
 	const moveDiffCommentAnchor = (delta: number, options: { readonly preserveViewportRow?: boolean } = {}) => {
 		const anchors = navigableDiffCommentAnchors()
 		if (anchors.length === 0) return
-		const rows = [...new Set(anchors.map((anchor) => anchor.renderLine))].sort((left, right) => left - right)
 		const currentAnchor = selectedDiffCommentAnchor && anchors.includes(selectedDiffCommentAnchor) ? selectedDiffCommentAnchor : anchors[0]
-		const currentRowIndex = Math.max(0, currentAnchor ? rows.indexOf(currentAnchor.renderLine) : 0)
-		const nextRow = rows[Math.max(0, Math.min(rows.length - 1, currentRowIndex + delta))]
-		if (nextRow === undefined) return
-		const nextAnchor = anchors.find((anchor) => anchor.renderLine === nextRow && anchor.side === currentAnchor?.side)
-			?? anchors.find((anchor) => anchor.renderLine === nextRow)
+		const nextAnchor = verticalDiffAnchor(anchors, currentAnchor ?? null, delta, diffPreferredSide)
 		if (!nextAnchor) return
 		if (options.preserveViewportRow) {
 			const scroll = diffScrollRef.current
@@ -1321,8 +1416,9 @@ export const App = () => {
 	}
 
 	const selectDiffCommentSide = (side: DiffCommentSide) => {
+		setDiffPreferredSide(side)
 		if (!selectedDiffCommentAnchor) return
-		const nextAnchor = diffCommentAnchors.find((anchor) => anchor.renderLine === selectedDiffCommentAnchor.renderLine && anchor.side === side)
+		const nextAnchor = diffAnchorOnSide(diffCommentAnchors, selectedDiffCommentAnchor, side)
 		if (!nextAnchor) return
 		setDiffCommentRangeStartIndex(null)
 		setDiffCommentAnchorIndex(diffCommentAnchors.indexOf(nextAnchor))
@@ -1333,6 +1429,7 @@ export const App = () => {
 		const nextAnchor = (side ? lineAnchors.find((anchor) => anchor.side === side) : undefined) ?? lineAnchors[0]
 		if (!nextAnchor) return
 		suppressNextDiffCommentScrollRef.current = true
+		setDiffPreferredSide(side ?? nextAnchor.side)
 		if (diffCommentRangeStartAnchor && !sameDiffCommentTarget(diffCommentRangeStartAnchor, nextAnchor)) {
 			setDiffCommentRangeStartIndex(null)
 		}
@@ -1509,16 +1606,7 @@ export const App = () => {
 		setCloseModal((current) => ({ ...current, running: true, error: null }))
 		void closePullRequest({ repository, number })
 			.then(() => {
-				if (previousPullRequest) {
-					setRecentlyCompletedPullRequests((current) => ({
-						...current,
-						[previousPullRequest.url]: {
-							...previousPullRequest,
-							state: "closed",
-							autoMergeEnabled: false,
-						},
-					}))
-				}
+				if (previousPullRequest) markPullRequestCompleted(previousPullRequest, "closed")
 				closeActiveModal()
 				refreshPullRequests(`Closed #${number}`)
 			})
@@ -1551,6 +1639,12 @@ export const App = () => {
 		if (id === themeIdRef.current) return
 		themeIdRef.current = id
 		setThemeId(id)
+	}
+
+	const toggleDiffWhitespaceMode = () => {
+		const next = diffWhitespaceMode === "ignore" ? "show" : "ignore"
+		setDiffWhitespaceMode(next)
+		void Effect.runPromise(saveStoredDiffWhitespaceMode(next)).catch((error) => flashNotice(errorMessage(error)))
 	}
 
 	const moveThemeSelection = (delta: number) => {
@@ -1648,30 +1742,15 @@ export const App = () => {
 		const { repository, number } = mergeModal.info
 		const targetPullRequest = pullRequests.find((pullRequest) => pullRequest.repository === repository && pullRequest.number === number)
 		const previousPullRequest = targetPullRequest ?? null
-		const previousMergeInfo = mergeModal.info
 
 		if (targetPullRequest && option.optimisticAutoMergeEnabled !== undefined) {
 			updatePullRequest(targetPullRequest.url, (pullRequest) => ({ ...pullRequest, autoMergeEnabled: option.optimisticAutoMergeEnabled! }))
-			setMergeModal((current) => ({
-				...current,
-				info: current.info ? { ...current.info, autoMergeEnabled: option.optimisticAutoMergeEnabled! } : current.info,
-			}))
 		}
+		if (targetPullRequest && option.optimisticState === "merged") markPullRequestCompleted(targetPullRequest, "merged")
 
-		setMergeModal((current) => ({ ...current, running: true, error: null }))
+		closeActiveModal()
 		void mergePullRequest({ repository, number, action: option.action })
 			.then(() => {
-				if (option.refreshOnSuccess && previousPullRequest) {
-					setRecentlyCompletedPullRequests((current) => ({
-						...current,
-						[previousPullRequest.url]: {
-							...previousPullRequest,
-							state: "merged",
-							autoMergeEnabled: false,
-						},
-					}))
-				}
-				closeActiveModal()
 				if (option.refreshOnSuccess) {
 					refreshPullRequests(`${option.pastTense} #${number}`)
 				} else {
@@ -1679,8 +1758,7 @@ export const App = () => {
 				}
 			})
 			.catch((error) => {
-				if (previousPullRequest) updatePullRequest(previousPullRequest.url, () => previousPullRequest)
-				setMergeModal((current) => ({ ...current, running: false, info: previousMergeInfo, error: errorMessage(error) }))
+				if (previousPullRequest) restoreOptimisticPullRequest(previousPullRequest)
 				flashNotice(errorMessage(error))
 			})
 	}
@@ -1794,6 +1872,7 @@ export const App = () => {
 		diffReady: selectedDiffState?._tag === "Ready",
 		effectiveDiffRenderView,
 		diffWrapMode,
+		diffWhitespaceMode,
 		readyDiffFileCount: readyDiffFiles.length,
 		diffFileIndex,
 		diffRangeActive: diffCommentRangeActive,
@@ -1836,6 +1915,7 @@ export const App = () => {
 			},
 			toggleDiffRenderView: () => setDiffRenderView((current) => current === "unified" ? "split" : "unified"),
 			toggleDiffWrapMode: () => setDiffWrapMode((current) => current === "none" ? "word" : "none"),
+			toggleDiffWhitespaceMode,
 			jumpDiffFile,
 			openSelectedDiffComment,
 			toggleDiffCommentRange,
@@ -1910,6 +1990,13 @@ export const App = () => {
 		const selectedIndex = clampCommandIndex(current.selectedIndex + delta, commandPaletteCommands)
 		return selectedIndex === current.selectedIndex ? current : { ...current, selectedIndex }
 	})
+	const selectCommandPaletteIndex = (index: number) => setCommandPalette((current) => {
+		const selectedIndex = clampCommandIndex(index, commandPaletteCommands)
+		return selectedIndex === current.selectedIndex ? current : { ...current, selectedIndex }
+	})
+	const runCommandPaletteCommand = (command: AppCommand) => {
+		runCommand(command, { notifyDisabled: true, closePalette: true })
+	}
 	const scrollDetailFullViewBy = (delta: number) => {
 		detailScrollRef.current?.scrollBy({ x: 0, y: delta })
 		setDetailScrollOffset((current) => Math.max(0, current + delta))
@@ -2043,7 +2130,7 @@ export const App = () => {
 		commandPalette: {
 			closeModal: closeActiveModal,
 			runSelected: () => {
-				if (selectedCommand) runCommand(selectedCommand, { notifyDisabled: true, closePalette: true })
+				if (selectedCommand) runCommandPaletteCommand(selectedCommand)
 			},
 			moveSelection: moveCommandPaletteSelection,
 		},
@@ -2179,15 +2266,23 @@ export const App = () => {
 		}
 	})
 
+	if (isInitialLoading) {
+		return (
+			<box width={terminalWidth} height={terminalHeight} flexDirection="column" backgroundColor={colors.background}>
+				<LoadingLogoPane content={detailPlaceholderContent} width={contentWidth} height={terminalHeight} frame={loadingFrame} />
+			</box>
+		)
+	}
+
 	const fullscreenContentWidth = Math.max(24, contentWidth - 2)
 	const fullscreenBodyLines = Math.max(8, terminalHeight - 8)
 	const fullscreenDetailHeaderHeight = getDetailHeaderHeight(selectedPullRequest, contentWidth, isWideLayout)
 	const fullscreenDetailBodyViewportHeight = Math.max(1, wideBodyHeight - fullscreenDetailHeaderHeight)
-	const fullscreenDetailBodyHeight = getScrollableDetailBodyHeight(selectedPullRequest, fullscreenContentWidth)
+	const fullscreenDetailBodyHeight = getScrollableDetailBodyHeight(selectedPullRequest, fullscreenContentWidth, selectedConversationItems, selectedConversationStatus)
 	const fullscreenDetailBodyScrollable = fullscreenDetailBodyHeight > fullscreenDetailBodyViewportHeight
 	const wideDetailHeaderHeight = getDetailHeaderHeight(selectedPullRequest, rightPaneWidth, true)
 	const wideDetailBodyViewportHeight = Math.max(1, wideBodyHeight - wideDetailHeaderHeight)
-	const wideDetailBodyHeight = getScrollableDetailBodyHeight(selectedPullRequest, rightContentWidth)
+	const wideDetailBodyHeight = getScrollableDetailBodyHeight(selectedPullRequest, rightContentWidth, selectedConversationItems, selectedConversationStatus)
 	const wideDetailBodyScrollable = wideDetailBodyHeight > wideDetailBodyViewportHeight
 
 	const prListProps = {
@@ -2259,20 +2354,19 @@ export const App = () => {
 			<box paddingLeft={1} paddingRight={1} flexDirection="column" backgroundColor={colors.background}>
 				<PlainLine text={headerLine} fg={colors.muted} bold />
 			</box>
-			{isWideLayout && !detailFullView && !diffFullView && !isInitialLoading ? (
+			{isWideLayout && !detailFullView && !diffFullView ? (
 				<Divider width={contentWidth} junctionAt={dividerJunctionAt} junctionChar="┬" />
 			) : (
 				<Divider width={contentWidth} />
 			)}
-			{isInitialLoading ? (
-				<LoadingPane content={detailPlaceholderContent} width={contentWidth} height={wideBodyHeight} />
-			) : diffFullView ? (
+			{diffFullView ? (
 				<PullRequestDiffPane
 					pullRequest={selectedPullRequest}
-					diffState={selectedDiffState}
+					diffState={displayedDiffState}
 					stackedFiles={stackedDiffFiles}
 					scrollTop={diffScrollTop}
 					view={effectiveDiffRenderView}
+					whitespaceMode={diffWhitespaceMode}
 					wrapMode={diffWrapMode}
 					paneWidth={contentWidth}
 					height={wideBodyHeight}
@@ -2296,7 +2390,7 @@ export const App = () => {
 						<>
 							<DetailHeader pullRequest={selectedPullRequest} viewerUsername={username} contentWidth={fullscreenContentWidth} paneWidth={contentWidth} showChecks />
 							<scrollbox ref={detailScrollRef} focusable={false} flexGrow={1} verticalScrollbarOptions={{ visible: fullscreenDetailBodyScrollable }}>
-								<DetailBody pullRequest={selectedPullRequest} contentWidth={fullscreenContentWidth} bodyLines={fullscreenBodyLines} bodyLineLimit={DETAIL_BODY_SCROLL_LIMIT} loadingIndicator={loadingIndicator} themeId={themeId} />
+								<DetailBody pullRequest={selectedPullRequest} contentWidth={fullscreenContentWidth} bodyLines={fullscreenBodyLines} bodyLineLimit={DETAIL_BODY_SCROLL_LIMIT} conversationItems={selectedConversationItems} conversationStatus={selectedConversationStatus} loadingIndicator={loadingIndicator} themeId={themeId} />
 							</scrollbox>
 						</>
 					) : (
@@ -2323,7 +2417,7 @@ export const App = () => {
 							<>
 								<DetailHeader pullRequest={selectedPullRequest} viewerUsername={username} contentWidth={rightContentWidth} paneWidth={rightPaneWidth} showChecks />
 								<scrollbox ref={detailPreviewScrollRef} flexGrow={1} verticalScrollbarOptions={{ visible: wideDetailBodyScrollable }}>
-									<DetailBody pullRequest={selectedPullRequest} contentWidth={rightContentWidth} bodyLines={wideDetailLines} bodyLineLimit={DETAIL_BODY_SCROLL_LIMIT} loadingIndicator={loadingIndicator} themeId={themeId} />
+									<DetailBody pullRequest={selectedPullRequest} contentWidth={rightContentWidth} bodyLines={wideDetailLines} bodyLineLimit={DETAIL_BODY_SCROLL_LIMIT} conversationItems={selectedConversationItems} conversationStatus={selectedConversationStatus} loadingIndicator={loadingIndicator} themeId={themeId} />
 								</scrollbox>
 							</>
 						) : (
@@ -2337,7 +2431,7 @@ export const App = () => {
 						<>
 							<DetailHeader pullRequest={selectedPullRequest} viewerUsername={username} contentWidth={fullscreenContentWidth} paneWidth={contentWidth} />
 							<scrollbox ref={detailScrollRef} focusable={false} flexGrow={1} verticalScrollbarOptions={{ visible: fullscreenDetailBodyScrollable }}>
-								<DetailBody pullRequest={selectedPullRequest} contentWidth={fullscreenContentWidth} bodyLines={fullscreenBodyLines} bodyLineLimit={DETAIL_BODY_SCROLL_LIMIT} loadingIndicator={loadingIndicator} themeId={themeId} />
+								<DetailBody pullRequest={selectedPullRequest} contentWidth={fullscreenContentWidth} bodyLines={fullscreenBodyLines} bodyLineLimit={DETAIL_BODY_SCROLL_LIMIT} conversationItems={selectedConversationItems} conversationStatus={selectedConversationStatus} loadingIndicator={loadingIndicator} themeId={themeId} />
 							</scrollbox>
 						</>
 					) : (
@@ -2346,7 +2440,7 @@ export const App = () => {
 				</box>
 			) : (
 				<box key="narrow-main" height={wideBodyHeight} flexDirection="column">
-					<DetailsPane pullRequest={selectedPullRequest} viewerUsername={username} contentWidth={fullscreenContentWidth} paneWidth={contentWidth} placeholderContent={detailPlaceholderContent} loadingIndicator={loadingIndicator} themeId={themeId} />
+					<DetailsPane pullRequest={selectedPullRequest} viewerUsername={username} contentWidth={fullscreenContentWidth} paneWidth={contentWidth} conversationItems={selectedConversationItems} conversationStatus={selectedConversationStatus} placeholderContent={detailPlaceholderContent} loadingIndicator={loadingIndicator} themeId={themeId} />
 					<Divider width={contentWidth} />
 					<box flexGrow={1} flexDirection="column">
 						<scrollbox ref={prListScrollRef} focusable={false} flexGrow={1}>
@@ -2358,7 +2452,7 @@ export const App = () => {
 				</box>
 			)}
 
-			{isWideLayout && !detailFullView && !diffFullView && !isInitialLoading ? (
+			{isWideLayout && !detailFullView && !diffFullView ? (
 				<Divider width={contentWidth} junctionAt={dividerJunctionAt} junctionChar="┴" />
 			) : (
 				<Divider width={contentWidth} />
@@ -2462,6 +2556,8 @@ export const App = () => {
 					modalHeight={commandPaletteHeight}
 					offsetLeft={commandPaletteLeft}
 					offsetTop={commandPaletteTop}
+					onSelectCommandIndex={selectCommandPaletteIndex}
+					onRunCommand={runCommandPaletteCommand}
 				/>
 			) : null}
 		</box>

@@ -2,7 +2,8 @@ import type { DiffRenderable, MouseEvent, ScrollBoxRenderable } from "@opentui/c
 import { useMemo, type Ref } from "react"
 import type { DiffCommentSide, PullRequestItem, PullRequestReviewComment } from "../domain.js"
 import { colors, type ThemeId } from "./colors.js"
-import { createDiffSyntaxStyle, diffCommentAnchorLabel, diffFileStats, diffFileStatsText, diffStatText, stackedDiffFileAtLine, type DiffFileStats, type DiffView, type DiffWrapMode, type PullRequestDiffState, type StackedDiffCommentAnchor, type StackedDiffFilePatch } from "./diff.js"
+import { CommentBodyLine, commentCountText, commentMetaSegments, CommentSegmentsLine } from "./comments.js"
+import { createDiffSyntaxStyle, diffCommentAnchorLabel, diffCommentLineLabel, diffFileStats, diffFileStatsText, diffStatText, stackedDiffFileIndexAtLine, type DiffFileStats, type DiffView, type DiffWhitespaceMode, type DiffWrapMode, type PullRequestDiffState, type StackedDiffCommentAnchor, type StackedDiffFilePatch } from "./diff.js"
 import { LoadingPane, StatusCard } from "./DetailsPane.js"
 import { DiffStats } from "./diffStats.js"
 import { Divider, fitCell, PaddedRow, PlainLine, TextLine } from "./primitives.js"
@@ -65,17 +66,13 @@ const FileHeader = ({
 	)
 }
 
-const firstCommentBodyLine = (body: string) => {
-	const newlineIndex = body.indexOf("\n")
-	return (newlineIndex >= 0 ? body.slice(0, newlineIndex) : body).trim() || "(empty comment)"
-}
-
 export const PullRequestDiffPane = ({
 	pullRequest,
 	diffState,
 	stackedFiles,
 	scrollTop,
 	view,
+	whitespaceMode,
 	wrapMode,
 	paneWidth,
 	height,
@@ -93,6 +90,7 @@ export const PullRequestDiffPane = ({
 	stackedFiles: readonly StackedDiffFilePatch[]
 	scrollTop: number
 	view: DiffView
+	whitespaceMode: DiffWhitespaceMode
 	wrapMode: DiffWrapMode
 	paneWidth: number
 	height: number
@@ -135,22 +133,26 @@ export const PullRequestDiffPane = ({
 	}
 
 	if (readyFiles.length === 0 || stackedFiles.length === 0) {
-		return <LoadingPane content={{ title: "No diff", hint: "This PR has no patch contents" }} width={paneWidth} height={height} />
+		return <LoadingPane content={{ title: whitespaceMode === "ignore" ? "No non-whitespace diff" : "No diff", hint: whitespaceMode === "ignore" ? "Use the command palette to show whitespace changes" : "This PR has no patch contents" }} width={paneWidth} height={height} />
 	}
 
-	const selectedSideLabel = selectedCommentAnchor?.side === "RIGHT" ? "right" : selectedCommentAnchor?.side === "LEFT" ? "left" : null
 	const hasSelectedCommentAnchor = selectedCommentAnchor !== null
 	const commentPeek = hasSelectedCommentAnchor && selectedCommentThread.length > 0
 		? selectedCommentThread[selectedCommentThread.length - 1]!
 		: null
-	const commentPeekCount = selectedCommentThread.length === 1 ? "1 comment" : `${selectedCommentThread.length} comments`
-	const commentPeekBody = commentPeek ? firstCommentBodyLine(commentPeek.body) : "(empty comment)"
 	const commentPeekMeta = commentPeek && selectedCommentAnchor
-		? `${selectedCommentLabel ?? selectedSideLabel ?? "line"}  ${commentPeek.author}  ${commentPeekCount}  enter thread`
-		: ""
+		? commentMetaSegments({
+			item: commentPeek,
+			markerLabel: diffCommentLineLabel(selectedCommentAnchor),
+			groups: [
+				[{ text: commentCountText(selectedCommentThread.length), fg: colors.muted }],
+				[{ text: "enter", fg: colors.text }, { text: " thread", fg: colors.muted }],
+			],
+		})
+		: []
 	const stickyScrollTop = Math.max(0, Math.floor(scrollTop))
-	const stickyFile = stackedDiffFileAtLine(stackedFiles, stickyScrollTop) ?? stackedFiles[0]
-	const stickyArrayIndex = stickyFile ? stackedFiles.indexOf(stickyFile) : -1
+	const stickyArrayIndex = stackedDiffFileIndexAtLine(stackedFiles, stickyScrollTop)
+	const stickyFile = stickyArrayIndex >= 0 ? stackedFiles[stickyArrayIndex] : stackedFiles[0]
 	const incomingStickyFile = stickyArrayIndex >= 0 ? stackedFiles[stickyArrayIndex + 1] : undefined
 	const incomingHeaderDistance = incomingStickyFile ? incomingStickyFile.headerLine - stickyScrollTop : Number.POSITIVE_INFINITY
 	const incomingFile = incomingHeaderDistance === 1 ? incomingStickyFile : undefined
@@ -234,10 +236,10 @@ export const PullRequestDiffPane = ({
 				<>
 					<Divider width={paneWidth} />
 					<PaddedRow>
-						<PlainLine text={fitCell(commentPeekMeta, Math.max(1, paneWidth - 2))} fg={colors.count} />
+						<CommentSegmentsLine segments={commentPeekMeta} />
 					</PaddedRow>
 					<PaddedRow>
-						<PlainLine text={fitCell(commentPeekBody, Math.max(1, paneWidth - 2))} fg={colors.text} />
+						<CommentBodyLine body={commentPeek.body} width={Math.max(1, paneWidth - 2)} />
 					</PaddedRow>
 				</>
 			) : null}

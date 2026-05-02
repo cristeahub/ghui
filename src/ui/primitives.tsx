@@ -167,6 +167,7 @@ export const ModalFrame = ({
 	width,
 	height,
 	junctionRows = [],
+	topJunctionColumns = [],
 	backgroundColor = colors.modalBackground,
 }: {
 	children: React.ReactNode
@@ -175,15 +176,18 @@ export const ModalFrame = ({
 	width: number
 	height: number
 	junctionRows?: readonly number[]
+	topJunctionColumns?: readonly number[]
 	backgroundColor?: string
 }) => {
 	const innerWidth = Math.max(1, width - 2)
 	const innerHeight = Math.max(1, height - 2)
 	const junctions = new Set(junctionRows)
+	const topJunctions = new Set(topJunctionColumns)
+	const topBorder = Array.from({ length: innerWidth }, (_, index) => topJunctions.has(index) ? "┬" : "─").join("")
 
 	return (
 		<box position="absolute" left={left} top={top} width={width} height={height} flexDirection="column" backgroundColor={backgroundColor}>
-			<PlainLine text={`┌${"─".repeat(innerWidth)}┐`} fg={colors.separator} />
+			<PlainLine text={`┌${topBorder}┐`} fg={colors.separator} />
 			<box height={innerHeight} flexDirection="row">
 				<box width={1} height={innerHeight} flexDirection="column">
 					{Array.from({ length: innerHeight }, (_, index) => <PlainLine key={index} text={junctions.has(index) ? "├" : "│"} fg={colors.separator} />)}

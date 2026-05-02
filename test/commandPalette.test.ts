@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import type { AppCommand, CommandScope } from "../src/commands.ts"
-import { buildCommandPaletteRows, commandPaletteScrollTop, commandPaletteSelectedRowIndex } from "../src/ui/CommandPalette.tsx"
+import { buildCommandPaletteRows, commandPaletteClampScrollTop, commandPaletteScrollTop, commandPaletteSelectedRowIndex } from "../src/ui/CommandPalette.tsx"
 
 const command = (id: string, scope: CommandScope): AppCommand => ({
 	id,
@@ -56,6 +56,12 @@ describe("command palette rows", () => {
 })
 
 describe("command palette scroll", () => {
+	test("clamps mouse wheel scroll positions", () => {
+		expect(commandPaletteClampScrollTop(20, 5, -1)).toBe(0)
+		expect(commandPaletteClampScrollTop(20, 5, 8)).toBe(8)
+		expect(commandPaletteClampScrollTop(20, 5, 30)).toBe(15)
+	})
+
 	test("scrolls just enough to keep the selected row visible", () => {
 		expect(commandPaletteScrollTop({ current: 0, rowsLength: 20, listHeight: 5, selectedRowIndex: 0 })).toBe(0)
 		expect(commandPaletteScrollTop({ current: 0, rowsLength: 20, listHeight: 5, selectedRowIndex: 4 })).toBe(0)
