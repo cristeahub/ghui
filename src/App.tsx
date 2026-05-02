@@ -1787,6 +1787,48 @@ export const App = () => {
 		],
 	}), [])
 
+	// CloseModal: escape closes, enter confirms.
+	const closeModalActiveRef = useRef(false)
+	closeModalActiveRef.current = closeModalActive
+	const closeActiveModalRef = useRef(closeActiveModal)
+	closeActiveModalRef.current = closeActiveModal
+	const confirmClosePullRequestRef = useRef(confirmClosePullRequest)
+	confirmClosePullRequestRef.current = confirmClosePullRequest
+	useBindings(() => ({
+		enabled: () => closeModalActiveRef.current,
+		bindings: [
+			{ key: "escape", cmd: () => closeActiveModalRef.current() },
+			{ key: "return", cmd: () => confirmClosePullRequestRef.current() },
+		],
+	}), [])
+
+	// MergeModal: escape, enter (when options>0), up/down/j/k navigation.
+	const mergeModalActiveRef = useRef(false)
+	mergeModalActiveRef.current = mergeModalActive
+	const mergeModalContextRef = useRef({ availableCount: 0, confirm: confirmMergeAction, setMergeModal })
+	mergeModalContextRef.current = {
+		availableCount: availableMergeActions(mergeModal.info).length,
+		confirm: confirmMergeAction,
+		setMergeModal,
+	}
+	const moveMergeSelection = (delta: -1 | 1) => mergeModalContextRef.current.setMergeModal((current) => {
+		const max = Math.max(0, mergeModalContextRef.current.availableCount - 1)
+		return { ...current, selectedIndex: Math.max(0, Math.min(max, current.selectedIndex + delta)) }
+	})
+	useBindings(() => ({
+		enabled: () => mergeModalActiveRef.current,
+		bindings: [
+			{ key: "escape", cmd: () => closeActiveModalRef.current() },
+			{ key: "return", cmd: () => {
+				if (mergeModalContextRef.current.availableCount > 0) mergeModalContextRef.current.confirm()
+			} },
+			{ key: "up", cmd: () => moveMergeSelection(-1) },
+			{ key: "k", cmd: () => moveMergeSelection(-1) },
+			{ key: "down", cmd: () => moveMergeSelection(1) },
+			{ key: "j", cmd: () => moveMergeSelection(1) },
+		],
+	}), [])
+
 	useKeyboard((key) => {
 		if (commandPaletteActive) {
 			if (key.name === "escape" || key.ctrl && key.name === "c") {
@@ -2016,44 +2058,7 @@ export const App = () => {
 			return
 		}
 
-		if (closeModalActive) {
-			if (key.name === "escape") {
-				closeActiveModal()
-				return
-			}
-			if (key.name === "return" || key.name === "enter") {
-				confirmClosePullRequest()
-				return
-			}
-			return
-		}
 
-		if (mergeModalActive) {
-			const options = availableMergeActions(mergeModal.info)
-			if (key.name === "escape") {
-				closeActiveModal()
-				return
-			}
-			if ((key.name === "return" || key.name === "enter") && options.length > 0) {
-				confirmMergeAction()
-				return
-			}
-			if (key.name === "up" || key.name === "k") {
-				setMergeModal((current) => ({
-					...current,
-					selectedIndex: Math.max(0, current.selectedIndex - 1),
-				}))
-				return
-			}
-			if (key.name === "down" || key.name === "j") {
-				setMergeModal((current) => ({
-					...current,
-					selectedIndex: Math.min(Math.max(0, options.length - 1), current.selectedIndex + 1),
-				}))
-				return
-			}
-			return
-		}
 
 		if (labelModalActive) {
 			if (key.name === "escape") {
