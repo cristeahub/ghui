@@ -51,6 +51,17 @@ export interface CloseModalState {
 	readonly error: string | null
 }
 
+export interface PullRequestStateModalState {
+	readonly repository: string | null
+	readonly number: number | null
+	readonly title: string
+	readonly url: string | null
+	readonly isDraft: boolean
+	readonly selectedIsDraft: boolean
+	readonly running: boolean
+	readonly error: string | null
+}
+
 export interface CommentModalState {
 	readonly body: string
 	readonly cursor: number
@@ -307,6 +318,17 @@ export const initialCloseModalState: CloseModalState = {
 	error: null,
 }
 
+export const initialPullRequestStateModalState: PullRequestStateModalState = {
+	repository: null,
+	number: null,
+	title: "",
+	url: null,
+	isDraft: false,
+	selectedIsDraft: true,
+	running: false,
+	error: null,
+}
+
 export const initialCommentModalState: CommentModalState = {
 	body: "",
 	cursor: 0,
@@ -354,6 +376,7 @@ export type Modal = Data.TaggedEnum<{
 	None: {}
 	Label: LabelModalState
 	Close: CloseModalState
+	PullRequestState: PullRequestStateModalState
 	Merge: MergeModalState
 	Comment: CommentModalState
 	CommentThread: CommentThreadModalState
@@ -373,6 +396,7 @@ export type ModalState<Tag extends Exclude<ModalTag, "None">> = Omit<Extract<Mod
 export const modalInitialStates = {
 	Label: initialLabelModalState,
 	Close: initialCloseModalState,
+	PullRequestState: initialPullRequestStateModalState,
 	Merge: initialMergeModalState,
 	Comment: initialCommentModalState,
 	CommentThread: initialCommentThreadModalState,
@@ -740,6 +764,75 @@ export const CloseModal = ({
 					<Filler rows={topRows} prefix="top" />
 					<PlainLine text={titleLines[0]!} fg={colors.muted} />
 					<PlainLine text={titleLines[1]!} fg={colors.text} bold />
+					<Filler rows={bottomRows} prefix="bottom" />
+				</>
+			)}
+		</StandardModal>
+	)
+}
+
+export const PullRequestStateModal = ({
+	state,
+	modalWidth,
+	modalHeight,
+	offsetLeft,
+	offsetTop,
+	loadingIndicator,
+}: {
+	state: PullRequestStateModalState
+	modalWidth: number
+	modalHeight: number
+	offsetLeft: number
+	offsetTop: number
+	loadingIndicator: string
+}) => {
+	const { contentWidth, bodyHeight } = standardModalDims(modalWidth, modalHeight)
+	const title = "Pull Request State"
+	const options = [
+		{ isDraft: true, label: "Draft" },
+		{ isDraft: false, label: "Ready for review" },
+	] as const
+	const headerRight = state.running ? { text: `${loadingIndicator} updating`, pending: true } : null
+	const bottomRows = Math.max(0, bodyHeight - options.length)
+
+	return (
+		<StandardModal
+			left={offsetLeft}
+			top={offsetTop}
+			width={modalWidth}
+			height={modalHeight}
+			title={title}
+			{...(headerRight ? { headerRight } : {})}
+			subtitle={<PlainLine text={fitCell("Select the desired state for this PR.", contentWidth)} fg={colors.muted} />}
+			bodyPadding={1}
+			footer={
+				<HintRow
+					items={[
+						{ key: "↑↓", label: "choose" },
+						{ key: "enter", label: "apply" },
+						{ key: "esc", label: "cancel" },
+					]}
+				/>
+			}
+		>
+			{state.error ? (
+				<PlainLine text={fitCell(state.error, contentWidth)} fg={colors.error} />
+			) : (
+				<>
+					{options.map((option) => {
+						const isSelected = option.isDraft === state.selectedIsDraft
+						const isCurrent = option.isDraft === state.isDraft
+						const marker = isSelected ? "›" : " "
+						const stateMarker = isCurrent ? "●" : "○"
+						const labelWidth = Math.max(1, contentWidth - marker.length - stateMarker.length - 3)
+						return (
+							<TextLine key={option.label} bg={isSelected ? colors.selectedBg : undefined} fg={isSelected ? colors.selectedText : colors.text}>
+								<span fg={isSelected ? colors.count : colors.muted}>{marker}</span>
+								<span fg={isCurrent ? colors.count : colors.muted}> {stateMarker}</span>
+								{isCurrent ? <span attributes={TextAttributes.BOLD}> {fitCell(option.label, labelWidth)}</span> : <span> {fitCell(option.label, labelWidth)}</span>}
+							</TextLine>
+						)
+					})}
 					<Filler rows={bottomRows} prefix="bottom" />
 				</>
 			)}

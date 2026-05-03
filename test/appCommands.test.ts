@@ -76,7 +76,7 @@ const buildCommands = (overrides: Partial<Parameters<typeof buildAppCommands>[0]
 			moveDiffCommentThread: noop,
 			openDiffCommentModal: noop,
 			openSubmitReviewModal: noop,
-			togglePullRequestDraftStatus: noop,
+			openPullRequestStateModal: noop,
 			openLabelModal: noop,
 			openMergeModal: noop,
 			openCloseModal: noop,
@@ -115,6 +115,14 @@ describe("review UX commands", () => {
 	test("submit-review command requires an open pull request", () => {
 		expect(
 			commandById("pull.submit-review", {
+				selectedPullRequest: { ...selectedPullRequest, state: "closed" },
+			}).disabledReason,
+		).toBe("Pull request is not open.")
+	})
+
+	test("state command requires an open pull request", () => {
+		expect(
+			commandById("pull.toggle-draft", {
 				selectedPullRequest: { ...selectedPullRequest, state: "closed" },
 			}).disabledReason,
 		).toBe("Pull request is not open.")

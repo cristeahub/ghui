@@ -28,7 +28,7 @@ interface AppCommandActions {
 	readonly moveDiffCommentThread: (delta: 1 | -1) => void
 	readonly openDiffCommentModal: () => void
 	readonly openSubmitReviewModal: (initialEvent?: PullRequestReviewEvent) => void
-	readonly togglePullRequestDraftStatus: () => void
+	readonly openPullRequestStateModal: () => void
 	readonly openLabelModal: () => void
 	readonly openMergeModal: () => void
 	readonly openCloseModal: () => void
@@ -339,11 +339,12 @@ export const buildAppCommands = ({
 		}),
 		forSelected({
 			id: "pull.toggle-draft",
-			title: selectedPullRequest?.reviewStatus === "draft" ? "Mark ready for review" : "Mark as draft",
+			title: selectedPullRequest?.reviewStatus === "draft" ? "Mark ready for review" : "Convert to draft",
 			scope: "Pull request",
 			shortcut: "s",
+			requireOpen: true,
 			keywords: ["state", "ready"],
-			run: actions.togglePullRequestDraftStatus,
+			run: actions.openPullRequestStateModal,
 		}),
 		forSelected({
 			id: "pull.labels",

@@ -25,13 +25,17 @@ export const normalizeOpenTuiKey = (event: KeyEvent): ParsedStroke => ({
  * stack two `useKeyboard` listeners on the same component.
  */
 export const useOpenTuiSubscribe = (): KeySubscribe => {
-	const handlersRef = useRef<Set<(stroke: ParsedStroke) => void>>(new Set())
+	const handlersRef = useRef<Set<(stroke: ParsedStroke) => boolean | void>>(new Set())
 
 	useKeyboard((event) => {
 		const keyEvent = event as KeyEvent
 		if (keyEvent.defaultPrevented) return
 		const stroke = normalizeOpenTuiKey(keyEvent)
-		for (const handler of handlersRef.current) handler(stroke)
+		let handled = false
+		for (const handler of handlersRef.current) {
+			if (handler(stroke)) handled = true
+		}
+		if (handled) keyEvent.preventDefault()
 	})
 
 	return useMemo<KeySubscribe>(

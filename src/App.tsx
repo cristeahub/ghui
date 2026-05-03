@@ -121,12 +121,14 @@ import {
 	initialMergeModalState,
 	initialModal,
 	initialOpenRepositoryModalState,
+	initialPullRequestStateModalState,
 	initialSubmitReviewModalState,
 	initialThemeModalState,
 	LabelModal,
 	MergeModal,
 	Modal,
 	OpenRepositoryModal,
+	PullRequestStateModal,
 	submitReviewOptions,
 	SubmitReviewModal,
 	ThemeModal,
@@ -140,6 +142,7 @@ import {
 	type ModalState,
 	type ModalTag,
 	type OpenRepositoryModalState,
+	type PullRequestStateModalState,
 	type SubmitReviewModalState,
 	type ThemeModalState,
 } from "./ui/modals.js"
@@ -634,6 +637,7 @@ export const App = () => {
 	const closeActiveModal = () => setActiveModal(initialModal)
 	const labelModalActive = Modal.$is("Label")(activeModal)
 	const closeModalActive = Modal.$is("Close")(activeModal)
+	const pullRequestStateModalActive = Modal.$is("PullRequestState")(activeModal)
 	const mergeModalActive = Modal.$is("Merge")(activeModal)
 	const commentModalActive = Modal.$is("Comment")(activeModal)
 	const commentThreadModalActive = Modal.$is("CommentThread")(activeModal)
@@ -644,6 +648,7 @@ export const App = () => {
 	const openRepositoryModalActive = Modal.$is("OpenRepository")(activeModal)
 	const labelModal: LabelModalState = labelModalActive ? activeModal : initialLabelModalState
 	const closeModal: CloseModalState = closeModalActive ? activeModal : initialCloseModalState
+	const pullRequestStateModal: PullRequestStateModalState = pullRequestStateModalActive ? activeModal : initialPullRequestStateModalState
 	const mergeModal: MergeModalState = mergeModalActive ? activeModal : initialMergeModalState
 	const commentModal: CommentModalState = commentModalActive ? activeModal : initialCommentModalState
 	const commentThreadModal: CommentThreadModalState = commentThreadModalActive ? activeModal : initialCommentThreadModalState
@@ -666,6 +671,7 @@ export const App = () => {
 			})
 	const setLabelModal = makeModalSetter("Label")
 	const setCloseModal = makeModalSetter("Close")
+	const setPullRequestStateModal = makeModalSetter("PullRequestState")
 	const setMergeModal = makeModalSetter("Merge")
 	const setCommentModal = makeModalSetter("Comment")
 	const setCommentThreadModal = makeModalSetter("CommentThread")
@@ -1272,6 +1278,7 @@ export const App = () => {
 		isLoadingMorePullRequests ||
 		labelModal.loading ||
 		closeModal.running ||
+		pullRequestStateModal.running ||
 		mergeModal.loading ||
 		mergeModal.running ||
 		submitReviewModal.running ||
@@ -1796,22 +1803,47 @@ export const App = () => {
 			.catch((error) => flashNotice(errorMessage(error)))
 	}
 
-	const toggleSelectedPullRequestDraftStatus = () => {
-		if (!selectedPullRequest) return
-		const previousPullRequest = selectedPullRequest
-		const nextReviewStatus = selectedPullRequest.reviewStatus === "draft" ? "review" : "draft"
-		updatePullRequest(selectedPullRequest.url, (pullRequest) => ({
-			...pullRequest,
-			reviewStatus: nextReviewStatus,
-		}))
-		void toggleDraftStatus({ repository: selectedPullRequest.repository, number: selectedPullRequest.number, isDraft: selectedPullRequest.reviewStatus === "draft" })
-			.then(() => {
-				flashNotice(selectedPullRequest.reviewStatus === "draft" ? `Marked #${selectedPullRequest.number} ready` : `Marked #${selectedPullRequest.number} draft`)
-			})
-			.catch((error) => {
-				updatePullRequest(selectedPullRequest.url, () => previousPullRequest)
-				flashNotice(errorMessage(error))
-			})
+	const openPullRequestStateModal = () => {
+		if (!selectedPullRequest || selectedPullRequest.state !== "open") return
+		setPullRequestStateModal({
+			repository: selectedPullRequest.repository,
+			number: selectedPullRequest.number,
+			title: selectedPullRequest.title,
+			url: selectedPullRequest.url,
+			isDraft: selectedPullRequest.reviewStatus === "draft",
+			selectedIsDraft: selectedPullRequest.reviewStatus !== "draft",
+			running: false,
+			error: null,
+		})
+	}
+
+	const movePullRequestStateSelection = () => {
+		setPullRequestStateModal((current) => ({ ...current, selectedIsDraft: !current.selectedIsDraft }))
+	}
+
+	const confirmPullRequestStateChange = () => {
+		if (!pullRequestStateModal.repository || pullRequestStateModal.number === null || !pullRequestStateModal.url || pullRequestStateModal.running) return
+		const { repository, number, url, isDraft, selectedIsDraft } = pullRequestStateModal
+		if (selectedIsDraft === isDraft) {
+			closeActiveModal()
+			return
+		}
+		const previousPullRequest = pullRequests.find((pullRequest) => pullRequest.url === url) ?? null
+		const nextReviewStatus = selectedIsDraft ? "draft" : "review"
+
+		if (previousPullRequest) {
+			updatePullRequest(url, (pullRequest) => ({
+				...pullRequest,
+				reviewStatus: nextReviewStatus,
+			}))
+		}
+		closeActiveModal()
+		flashNotice(selectedIsDraft ? `Converted #${number} to draft` : `Marked #${number} ready for review`)
+		void toggleDraftStatus({ repository, number, isDraft }).catch((error) => {
+			if (previousPullRequest) updatePullRequest(url, () => previousPullRequest)
+			const message = errorMessage(error)
+			flashNotice(message)
+		})
 	}
 
 	const openCloseModal = () => {
@@ -2185,7 +2217,7 @@ export const App = () => {
 			moveDiffCommentThread,
 			openDiffCommentModal,
 			openSubmitReviewModal,
-			togglePullRequestDraftStatus: toggleSelectedPullRequestDraftStatus,
+			openPullRequestStateModal,
 			openLabelModal,
 			openMergeModal,
 			openCloseModal,
@@ -2344,6 +2376,7 @@ export const App = () => {
 	// === Build the keymap context ===
 	const appCtx: AppCtx = {
 		closeModalActive,
+		pullRequestStateModalActive,
 		mergeModalActive,
 		commentThreadModalActive,
 		changedFilesModalActive,
@@ -2368,6 +2401,11 @@ export const App = () => {
 		closeModal: {
 			closeModal: closeActiveModal,
 			confirmClose: confirmClosePullRequest,
+		},
+		pullRequestStateModal: {
+			closeModal: closeActiveModal,
+			confirmStateChange: confirmPullRequestStateChange,
+			moveSelection: movePullRequestStateSelection,
 		},
 		mergeModal: {
 			availableActionCount: availableMergeActions(mergeModal.info).length,
@@ -2696,6 +2734,11 @@ export const App = () => {
 	const closeModalHeight = closeLayout.height
 	const closeModalLeft = closeLayout.left
 	const closeModalTop = closeLayout.top
+	const pullRequestStateLayout = sizedModal(46, 68, 12, 9)
+	const pullRequestStateModalWidth = pullRequestStateLayout.width
+	const pullRequestStateModalHeight = pullRequestStateLayout.height
+	const pullRequestStateModalLeft = pullRequestStateLayout.left
+	const pullRequestStateModalTop = pullRequestStateLayout.top
 	const commentLayout = sizedModal(46, 76, 8, 16)
 	const commentModalWidth = commentLayout.width
 	const commentModalHeight = commentLayout.height
@@ -2907,7 +2950,13 @@ export const App = () => {
 						hasSelection={selectedPullRequest !== null}
 						hasError={pullRequestStatus === "error"}
 						isLoading={
-							pullRequestStatus === "loading" || isRefreshingPullRequests || isHydratingPullRequestDetails || closeModal.running || mergeModal.running || submitReviewModal.running
+							pullRequestStatus === "loading" ||
+							isRefreshingPullRequests ||
+							isHydratingPullRequestDetails ||
+							closeModal.running ||
+							pullRequestStateModal.running ||
+							mergeModal.running ||
+							submitReviewModal.running
 						}
 						loadingIndicator={loadingIndicator}
 						retryProgress={retryProgress}
@@ -2932,6 +2981,16 @@ export const App = () => {
 					modalHeight={closeModalHeight}
 					offsetLeft={closeModalLeft}
 					offsetTop={closeModalTop}
+					loadingIndicator={loadingIndicator}
+				/>
+			) : null}
+			{pullRequestStateModalActive ? (
+				<PullRequestStateModal
+					state={pullRequestStateModal}
+					modalWidth={pullRequestStateModalWidth}
+					modalHeight={pullRequestStateModalHeight}
+					offsetLeft={pullRequestStateModalLeft}
+					offsetTop={pullRequestStateModalTop}
 					loadingIndicator={loadingIndicator}
 				/>
 			) : null}
