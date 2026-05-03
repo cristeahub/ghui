@@ -524,6 +524,35 @@ const groupDiffCommentThreads = (pullRequest: PullRequestItem, comments: readonl
 
 const isLocalDiffComment = (comment: PullRequestReviewComment) => comment.id.startsWith("local:")
 
+// Walk the inReplyTo chain to find the thread root id. The /replies endpoint
+// rejects ids that aren't roots with "parent comment not found".
+const findReviewThreadRootId = (comments: readonly PullRequestComment[], commentId: string): string => {
+	const reviewById = new Map<string, PullRequestComment & { readonly _tag: "review-comment" }>()
+	for (const entry of comments) if (entry._tag === "review-comment") reviewById.set(entry.id, entry)
+	let cursor = reviewById.get(commentId)
+	const seen = new Set<string>()
+	while (cursor && cursor.inReplyTo && !seen.has(cursor.id)) {
+		seen.add(cursor.id)
+		const parent = reviewById.get(cursor.inReplyTo)
+		if (!parent) break
+		cursor = parent
+	}
+	return cursor?.id ?? commentId
+}
+
+const QUOTE_BODY_LIMIT = 480
+const quotedReplyBody = (author: string, body: string): string => {
+	const trimmed = body.trim().slice(0, QUOTE_BODY_LIMIT)
+	const quoted =
+		trimmed.length > 0
+			? trimmed
+					.split("\n")
+					.map((line) => `> ${line}`)
+					.join("\n")
+			: ""
+	return `> @${author} wrote:\n${quoted}\n\n`
+}
+
 const reviewStatusAfterSubmit = {
 	COMMENT: null,
 	APPROVE: "approved",
@@ -1858,12 +1887,17 @@ export const App = () => {
 			return
 		}
 		if (comment._tag !== "review-comment") {
-			setCommentModal({ ...initialCommentModalState, target: { kind: "issue" } })
-			flashNotice("Top-level comments don't thread; new top-level comment instead.")
+			// Issue comments don't thread on GitHub; pre-fill a quote so the reply
+			// reads as a response in the chronological list.
+			const quote = quotedReplyBody(comment.author, comment.body)
+			setCommentModal({ ...initialCommentModalState, body: quote, cursor: quote.length, target: { kind: "issue" } })
 			return
 		}
+		// GitHub /comments/{id}/replies wants the *thread root* id; replying via a
+		// reply id can return "parent comment not found".
+		const rootId = findReviewThreadRootId(selectedComments, comment.id)
 		const anchor = `${comment.path}:${comment.line}`
-		setCommentModal({ ...initialCommentModalState, target: { kind: "reply", inReplyTo: comment.id, anchorLabel: anchor } })
+		setCommentModal({ ...initialCommentModalState, target: { kind: "reply", inReplyTo: rootId, anchorLabel: anchor } })
 	}
 
 	// Optimistic insert + post + swap-or-revert. Shared by issue and reply.
