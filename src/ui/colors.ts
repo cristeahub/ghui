@@ -18,6 +18,11 @@ export type ThemeId =
 	| "solarized-light"
 	| "everforest"
 	| "vesper"
+	| "ayu"
+	| "ayu-mirage"
+	| "ayu-light"
+	| "github-dark-dimmed"
+	| "palenight"
 	| "opencode"
 
 export type ThemeTone = "dark" | "light"
@@ -977,6 +982,204 @@ const vesperColors: ColorPalette = {
 	},
 }
 
+// Ayu theme - Modern bright theme with dark, mirage, and light variants
+const ayuColors: ColorPalette = {
+	background: "#0f1419",
+	modalBackground: "#131d27",
+	text: "#bfbdb6",
+	muted: "#565b66",
+	separator: "#242936",
+	accent: "#39bae6",
+	inlineCode: "#73b8ff",
+	error: "#f26d78",
+	selectedBg: "#1c2c3b",
+	selectedText: "#e6e1cf",
+	count: "#f29718",
+	status: {
+		draft: "#ffb454",
+		approved: "#7ee787",
+		changes: "#f26d78",
+		review: "#39bae6",
+		none: "#565b66",
+		passing: "#7ee787",
+		pending: "#ffb454",
+		failing: "#f26d78",
+	},
+	repos: {
+		opencode: "#39bae6",
+		"effect-smol": "#7ee787",
+		"opencode-console": "#d2a6ff",
+		opencontrol: "#f29718",
+		default: "#73b8ff",
+	},
+	diff: {
+		addedBg: "#1b322b",
+		removedBg: "#3b2226",
+		contextBg: "transparent",
+		lineNumberBg: "#0b0f14",
+		addedLineNumberBg: "#162b24",
+		removedLineNumberBg: "#321e21",
+	},
+}
+
+const ayuMirageColors: ColorPalette = {
+	background: "#1f2430",
+	modalBackground: "#242936",
+	text: "#cccac2",
+	muted: "#8a9199",
+	separator: "#33415e",
+	accent: "#73b8ff",
+	inlineCode: "#d2a6ff",
+	error: "#f07178",
+	selectedBg: "#2a3546",
+	selectedText: "#ffffff",
+	count: "#ffcc66",
+	status: {
+		draft: "#ffcc66",
+		approved: "#87d96c",
+		changes: "#f07178",
+		review: "#73b8ff",
+		none: "#8a9199",
+		passing: "#87d96c",
+		pending: "#ffcc66",
+		failing: "#f07178",
+	},
+	repos: {
+		opencode: "#73b8ff",
+		"effect-smol": "#87d96c",
+		"opencode-console": "#d2a6ff",
+		opencontrol: "#ffcc66",
+		default: "#5ccfe6",
+	},
+	diff: {
+		addedBg: "#243b30",
+		removedBg: "#3f2c30",
+		contextBg: "transparent",
+		lineNumberBg: "#191e2a",
+		addedLineNumberBg: "#1f342b",
+		removedLineNumberBg: "#38282b",
+	},
+}
+
+const ayuLightColors: ColorPalette = {
+	background: "#fcfcfc",
+	modalBackground: "#f3f4f5",
+	text: "#5c6166",
+	muted: "#8a9199",
+	separator: "#d3d5d8",
+	accent: "#0580f2",
+	inlineCode: "#a37acc",
+	error: "#e65050",
+	selectedBg: "#e7eaed",
+	selectedText: "#24292f",
+	count: "#f29718",
+	status: {
+		draft: "#f29718",
+		approved: "#4cbf99",
+		changes: "#e65050",
+		review: "#0580f2",
+		none: "#8a9199",
+		passing: "#4cbf99",
+		pending: "#f29718",
+		failing: "#e65050",
+	},
+	repos: {
+		opencode: "#0580f2",
+		"effect-smol": "#4cbf99",
+		"opencode-console": "#a37acc",
+		opencontrol: "#f29718",
+		default: "#33a3dc",
+	},
+	diff: {
+		addedBg: "#e6f2dc",
+		removedBg: "#f5e1df",
+		contextBg: "transparent",
+		lineNumberBg: "#f0f0f0",
+		addedLineNumberBg: "#d9ebd2",
+		removedLineNumberBg: "#f0dedc",
+	},
+}
+
+// GitHub Dark Dimmed - Slightly muted variant of GitHub Dark Default
+const githubDarkDimmedColors: ColorPalette = {
+	background: "#22272e",
+	modalBackground: "#2d333b",
+	text: "#adbac7",
+	muted: "#768390",
+	separator: "#444c56",
+	accent: "#539bf5",
+	inlineCode: "#f47067",
+	error: "#e5534b",
+	selectedBg: "#373e47",
+	selectedText: "#cdd9e5",
+	count: "#da3633",
+	status: {
+		draft: "#c69026",
+		approved: "#57ab5a",
+		changes: "#e5534b",
+		review: "#539bf5",
+		none: "#768390",
+		passing: "#57ab5a",
+		pending: "#c69026",
+		failing: "#e5534b",
+	},
+	repos: {
+		opencode: "#539bf5",
+		"effect-smol": "#6bc46d",
+		"opencode-console": "#b083f0",
+		opencontrol: "#e0823d",
+		default: "#6cb6ff",
+	},
+	diff: {
+		addedBg: "#1b3a2a",
+		removedBg: "#3b2626",
+		contextBg: "transparent",
+		lineNumberBg: "#1c2128",
+		addedLineNumberBg: "#163225",
+		removedLineNumberBg: "#332222",
+	},
+}
+
+// Material Palenight - Purple-tinted material theme variant
+const palenightColors: ColorPalette = {
+	background: "#292d3e",
+	modalBackground: "#313442",
+	text: "#a6accd",
+	muted: "#676e95",
+	separator: "#3e4451",
+	accent: "#82aaff",
+	inlineCode: "#c792ea",
+	error: "#ff5370",
+	selectedBg: "#3d445b",
+	selectedText: "#ffffff",
+	count: "#ffcb6b",
+	status: {
+		draft: "#ffcb6b",
+		approved: "#c3e88d",
+		changes: "#ff5370",
+		review: "#82aaff",
+		none: "#676e95",
+		passing: "#c3e88d",
+		pending: "#ffcb6b",
+		failing: "#ff5370",
+	},
+	repos: {
+		opencode: "#82aaff",
+		"effect-smol": "#c3e88d",
+		"opencode-console": "#c792ea",
+		opencontrol: "#ffcb6b",
+		default: "#89ddff",
+	},
+	diff: {
+		addedBg: "#253328",
+		removedBg: "#3b252d",
+		contextBg: "transparent",
+		lineNumberBg: "#232634",
+		addedLineNumberBg: "#1f2d24",
+		removedLineNumberBg: "#332329",
+	},
+}
+
 export const themeDefinitions: readonly ThemeDefinition[] = [
 	{ id: "system", name: "System", description: "Use the terminal foreground, background, and ANSI palette", tone: "dark", colors: systemColors },
 	{ id: "ghui", name: "GHUI", description: "Warm parchment accents on a deep slate background", tone: "dark", colors: ghuiColors },
@@ -997,6 +1200,11 @@ export const themeDefinitions: readonly ThemeDefinition[] = [
 	{ id: "solarized-light", name: "Solarized Light", description: "Warm beige base with the same calibrated accent colors", tone: "light", colors: solarizedLightColors },
 	{ id: "everforest", name: "Everforest", description: "Soft green-gray forest tones with warm highlights", tone: "dark", colors: everforestColors },
 	{ id: "vesper", name: "Vesper", description: "Minimal black surfaces with peach and aqua accents", tone: "dark", colors: vesperColors },
+	{ id: "ayu", name: "Ayu", description: "Modern bright dark theme with blue and orange accents", tone: "dark", colors: ayuColors },
+	{ id: "ayu-mirage", name: "Ayu Mirage", description: "Medium-contrast blue-gray with vibrant syntax colors", tone: "dark", colors: ayuMirageColors },
+	{ id: "ayu-light", name: "Ayu Light", description: "Clean light theme with crisp blue and orange accents", tone: "light", colors: ayuLightColors },
+	{ id: "github-dark-dimmed", name: "GitHub Dark Dimmed", description: "GitHub-inspired muted dark blue-gray with soft accents", tone: "dark", colors: githubDarkDimmedColors },
+	{ id: "palenight", name: "Palenight", description: "Material-inspired purple-blue with soft lavender tones", tone: "dark", colors: palenightColors },
 	{ id: "opencode", name: "OpenCode", description: "Charcoal panels with peach, violet, and blue highlights", tone: "dark", colors: opencodeColors },
 ] as const
 
@@ -1011,6 +1219,9 @@ const pairedThemeIds: Partial<Record<ThemeId, ThemeId>> = {
 	"one-light": "one-dark",
 	"solarized-dark": "solarized-light",
 	"solarized-light": "solarized-dark",
+	ayu: "ayu-light",
+	"ayu-mirage": "ayu-light",
+	"ayu-light": "ayu",
 }
 
 let activeTheme = themeDefinitions.find((theme) => theme.id === "ghui") ?? themeDefinitions[0]!
