@@ -18,3 +18,4 @@ When a plan ships, leave the file in place and update the **Status** line so we 
 ## Index
 
 - [`queued-reviews.md`](./queued-reviews.md) — pending diff-comment reviews and the submit/discard flow.
+- [`edit-delete-comments.md`](./edit-delete-comments.md) — edit your own comments in place, delete with confirm.
