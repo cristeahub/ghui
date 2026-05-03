@@ -36,6 +36,7 @@
 	},
 	"scripts": {
 		"build:cli": "bun run dev/build-cli.ts",
+		"build:standalone": "bun run dev/build-standalone.ts",
 		"changeset": "npm exec --package @changesets/cli@2.31.0 -- changeset",
 		"changeset:status": "npm exec --package @changesets/cli@2.31.0 -- changeset status",
 		"changeset:version": "npm exec --package @changesets/cli@2.31.0 -- changeset version",

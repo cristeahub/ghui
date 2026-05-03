@@ -11,7 +11,8 @@
 - Commit and push the version bump and consumed changesets to `main`.
 - Create a GitHub release named and tagged `v<package.json version>`.
 - Publishing to npm happens from GitHub Actions via trusted publishing; do not use an `NPM_TOKEN`.
-- The workflow verifies the release tag matches `package.json` and then runs `npm publish`.
+- The workflow verifies the release tag matches `package.json`, builds standalone binaries, runs `npm publish`, uploads release assets, and dispatches `kitlangton/homebrew-tap`.
+- Homebrew tap automation requires a `HOMEBREW_TAP_TOKEN` secret with access to dispatch workflows in `kitlangton/homebrew-tap`.
 
 ## Commands
 
@@ -31,6 +32,7 @@
 
 - Before committing or pushing code changes, run `bun run format:check`, `bun run typecheck`, `bun run lint`, and `bun run test`.
 - Before release commits, also run `bun run package:smoke`.
+- Before release commits, also run `bun run build:standalone`.
 - If formatting fails, run `bunx oxfmt src/ test/ dev/` or format only the touched files, then rerun `bun run format:check`.
 - CI enforces formatting with `bun run format:check`; do not rely on manual review to catch formatting drift.
 

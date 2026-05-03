@@ -9,13 +9,19 @@ Terminal UI for keeping up with your open GitHub pull requests across repositori
 ## Install
 
 ```bash
+brew install kitlangton/tap/ghui
+```
+
+Or with npm:
+
+```bash
 npm install -g @kitlangton/ghui
 ```
 
 Requirements:
 
-- Bun runtime installed
 - GitHub CLI installed and authenticated with `gh auth login`
+- Bun runtime installed when using the npm package
 
 Run it from anywhere:
 
