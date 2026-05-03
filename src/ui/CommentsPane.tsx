@@ -2,7 +2,17 @@ import { useEffect, useMemo, useRef } from "react"
 import { TextAttributes, type ScrollBoxRenderable } from "@opentui/core"
 import type { PullRequestComment, PullRequestItem } from "../domain.js"
 import { colors } from "./colors.js"
-import { commentBodyRows, commentCountText, commentMetaSegments, CommentSegmentsLine, type CommentDisplayLine, type CommentSegment } from "./comments.js"
+import {
+	commentBodyRows,
+	commentCountText,
+	commentMetaSegments,
+	CommentSegmentsLine,
+	QUOTE_HEADER_RE,
+	stripQuoteHeader,
+	type CommentDisplayLine,
+	type CommentSegment,
+} from "./comments.js"
+import { truncateConversationPath } from "./DetailsPane.js"
 import { centerCell, Divider, Filler, HintRow, PaddedRow, PlainLine, TextLine, type HintItem } from "./primitives.js"
 import { shortRepoName } from "./pullRequests.js"
 
@@ -11,8 +21,8 @@ const PLACEHOLDER_KEY = "__placeholder_new_comment"
 
 // Comments view always exposes one virtual "+ Add new comment" row at the
 // bottom, so the selectable row count is comments.length + this.
-export const COMMENTS_VIEW_PLACEHOLDER_ROWS = 1
-export const commentsViewRowCount = (count: number) => count + COMMENTS_VIEW_PLACEHOLDER_ROWS
+const PLACEHOLDER_ROWS = 1
+export const commentsViewRowCount = (count: number) => count + PLACEHOLDER_ROWS
 
 // Cap nesting depth — deep chains otherwise eat the pane width.
 const MAX_INDENT_LEVELS = 3
@@ -30,30 +40,15 @@ interface CommentBlock {
 
 const reviewContextGroups = (comment: PullRequestComment, width: number): readonly (readonly { readonly text: string; readonly fg: string }[])[] => {
 	if (comment._tag !== "review-comment") return []
-	const lineSuffix = `:${comment.line}`
-	const pathLabel = `${comment.path}${lineSuffix}`
+	const pathLabel = `${comment.path}:${comment.line}`
 	const room = Math.max(8, width - META_PREFIX_WIDTH - comment.author.length - 16)
-	const truncated = pathLabel.length <= room ? pathLabel : `…${pathLabel.slice(-(room - 1))}`
-	return [[{ text: truncated, fg: colors.inlineCode }]]
+	return [[{ text: truncateConversationPath(pathLabel, room), fg: colors.inlineCode }]]
 }
 
-// GitHub doesn't thread issue comments, but our quote-reply UX produces a body
-// like `> @author wrote:\n> <quoted>\n\n<reply>`. We use that prefix to find a
-// likely parent so the reply visually nests instead of falling to the bottom.
-const QUOTE_HEADER_RE = /^>\s*@(\S+)\s+wrote:\s*\n((?:>[^\n]*(?:\n|$))+)/
-
-// When we nest a quote-reply under its parent, the quoted block becomes visual
-// noise — the parent is already shown right above. Strip the leading quote
-// header so the rendered body is just the user's actual reply text.
-const stripQuoteHeader = (body: string): string => {
-	const match = QUOTE_HEADER_RE.exec(body)
-	if (!match) return body
-	return body.slice(match[0].length).replace(/^\n+/, "")
-}
-
-// Whitespace-tolerant compare: collapse blank lines and trailing spaces so the
-// quote text we extracted from a child matches its parent's body even when the
-// parent has its own blank line between the quote header and the reply text.
+// GitHub doesn't thread issue comments, so `issueQuoteParent` reverse-engineers
+// the parent from the `> @author wrote:` header that `quotedReplyBody` writes.
+// `collapseWhitespace` makes the body comparison tolerant of the blank line
+// the parent inserts between its own quote header and reply text.
 const collapseWhitespace = (text: string): string =>
 	text
 		.split("\n")
@@ -62,7 +57,11 @@ const collapseWhitespace = (text: string): string =>
 		.join("\n")
 		.trim()
 
-const issueQuoteParent = (comment: PullRequestComment & { readonly _tag: "comment" }, candidates: readonly PullRequestComment[]): string | null => {
+const issueQuoteParent = (
+	comment: PullRequestComment & { readonly _tag: "comment" },
+	candidates: readonly PullRequestComment[],
+	collapsedById: Map<string, string>,
+): string | null => {
 	const match = QUOTE_HEADER_RE.exec(comment.body)
 	if (!match) return null
 	const author = match[1] ?? ""
@@ -77,7 +76,7 @@ const issueQuoteParent = (comment: PullRequestComment & { readonly _tag: "commen
 		if (candidate.id === comment.id) continue
 		if (candidate._tag !== "comment") continue
 		if (candidate.author !== author) continue
-		const body = collapseWhitespace(candidate.body)
+		const body = collapsedById.get(candidate.id) ?? ""
 		if (body.length === 0) continue
 		if (body === quoted || body.startsWith(quoted) || quoted.startsWith(body)) return candidate.id
 	}
@@ -95,11 +94,15 @@ export interface OrderedComment {
 // (capped at MAX_INDENT_LEVELS so deep chains don't run off the pane).
 export const orderCommentsForDisplay = (comments: readonly PullRequestComment[]): readonly OrderedComment[] => {
 	const byId = new Map<string, PullRequestComment>()
-	for (const comment of comments) byId.set(comment.id, comment)
+	const collapsedIssueBodies = new Map<string, string>()
+	for (const comment of comments) {
+		byId.set(comment.id, comment)
+		if (comment._tag === "comment") collapsedIssueBodies.set(comment.id, collapseWhitespace(comment.body))
+	}
 
 	const parentIdFor = (comment: PullRequestComment): string | null => {
 		if (comment._tag === "review-comment") return comment.inReplyTo
-		return issueQuoteParent(comment, comments)
+		return issueQuoteParent(comment, comments, collapsedIssueBodies)
 	}
 
 	const childrenByParent = new Map<string, PullRequestComment[]>()

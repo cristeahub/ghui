@@ -150,6 +150,7 @@ import {
 	type ThemeModalState,
 } from "./ui/modals.js"
 import { groupBy, pullRequestMetadataText } from "./ui/pullRequests.js"
+import { quotedReplyBody } from "./ui/comments.js"
 import { CommentsPane, commentsViewRowCount, orderCommentsForDisplay } from "./ui/CommentsPane.js"
 import { PullRequestDiffPane } from "./ui/PullRequestDiffPane.js"
 import { buildPullRequestListRows, pullRequestListRowIndex, PullRequestList } from "./ui/PullRequestList.js"
@@ -540,19 +541,6 @@ const findReviewThreadRootId = (comments: readonly PullRequestComment[], comment
 	return cursor?.id ?? commentId
 }
 
-const QUOTE_BODY_LIMIT = 480
-const quotedReplyBody = (author: string, body: string): string => {
-	const trimmed = body.trim().slice(0, QUOTE_BODY_LIMIT)
-	const quoted =
-		trimmed.length > 0
-			? trimmed
-					.split("\n")
-					.map((line) => `> ${line}`)
-					.join("\n")
-			: ""
-	return `> @${author} wrote:\n${quoted}\n\n`
-}
-
 const reviewStatusAfterSubmit = {
 	COMMENT: null,
 	APPROVE: "approved",
@@ -874,7 +862,9 @@ export const App = () => {
 	)
 	const selectedPullRequestRowIndex = pullRequestListRowIndex(pullRequestListRows, selectedPullRequest?.url ?? null)
 	const selectedDiffKey = useAtomValue(selectedDiffKeyAtom)
-	const selectedComments = selectedDiffKey ? (pullRequestComments[selectedDiffKey] ?? []) : []
+	// Stabilize the reference so the orderedComments memo only refires when the
+	// underlying comment array actually changes (not every App re-render).
+	const selectedComments = useMemo(() => (selectedDiffKey ? (pullRequestComments[selectedDiffKey] ?? []) : []), [selectedDiffKey, pullRequestComments])
 	const selectedCommentsStatus: DetailCommentsStatus = selectedDiffKey ? (pullRequestCommentsLoaded[selectedDiffKey] ?? "idle") : "idle"
 	const selectedDiffState = useAtomValue(selectedDiffStateAtom)
 	const effectiveDiffRenderView = contentWidth >= 100 ? diffRenderView : "unified"

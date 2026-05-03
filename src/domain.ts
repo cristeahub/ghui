@@ -123,6 +123,9 @@ export type PullRequestComment =
 	  }
 	| ({ readonly _tag: "review-comment" } & PullRequestReviewComment)
 
+export const isReviewComment = (comment: PullRequestComment): comment is PullRequestComment & { readonly _tag: "review-comment" } => comment._tag === "review-comment"
+export const isIssueComment = (comment: PullRequestComment): comment is PullRequestComment & { readonly _tag: "comment" } => comment._tag === "comment"
+
 export interface PullRequestItem {
 	readonly repository: string
 	readonly author: string
