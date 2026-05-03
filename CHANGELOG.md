@@ -1,5 +1,17 @@
 # @kitlangton/ghui
 
+## 0.4.0
+
+### Minor Changes
+
+- 727eb3a: Add light theme variants behind a theme picker tab toggle, so dark and light themes preview separately.
+- b2dcde5: Ship npm installs through platform-specific standalone binary packages so npm users no longer need Bun installed.
+
+### Patch Changes
+
+- f724ea2: Add Homebrew installation support with standalone release binaries and tap update automation.
+- 0c09e21: Filter pull requests from archived repositories out of the default queues while keeping explicit repository views available.
+
 ## 0.3.3
 
 ### Patch Changes
