@@ -22,12 +22,15 @@ import {
 	type PullRequestItem,
 	type PullRequestLabel,
 	type PullRequestMergeAction,
+	type PullRequestMergeMethod,
 	type PullRequestReviewComment,
+	type RepositoryMergeMethods,
 	type SubmitPullRequestReviewInput,
 } from "./domain.js"
+import { allowedMergeMethodList, pullRequestMergeMethods } from "./domain.js"
 import { formatShortDate, formatTimestamp } from "./date.js"
 import { errorMessage } from "./errors.js"
-import { availableMergeActions, mergeInfoFromPullRequest } from "./mergeActions.js"
+import { getMergeKindDefinition, mergeInfoFromPullRequest, requiresMarkReady, visibleMergeKinds } from "./mergeActions.js"
 import { Observability } from "./observability.js"
 import { mergeCachedDetails } from "./pullRequestCache.js"
 import {
@@ -326,6 +329,8 @@ const pullRequestDiffCacheAtom = Atom.make<Record<string, PullRequestDiffState>>
 const activeModalAtom = Atom.make<Modal>(initialModal)
 const themeIdAtom = Atom.make<ThemeId>(initialThemeId).pipe(Atom.keepAlive)
 const labelCacheAtom = Atom.make<Record<string, readonly PullRequestLabel[]>>({}).pipe(Atom.keepAlive)
+const repoMergeMethodsCacheAtom = Atom.make<Record<string, RepositoryMergeMethods>>({}).pipe(Atom.keepAlive)
+const lastUsedMergeMethodAtom = Atom.make<Record<string, PullRequestMergeMethod>>({}).pipe(Atom.keepAlive)
 const pullRequestOverridesAtom = Atom.make<Record<string, PullRequestItem>>({}).pipe(Atom.keepAlive)
 const recentlyCompletedPullRequestsAtom = Atom.make<Record<string, PullRequestItem>>({}).pipe(Atom.keepAlive)
 const usernameAtom = githubRuntime.atom(GitHubService.use((github) => github.getAuthenticatedUser())).pipe(Atom.keepAlive)
@@ -446,6 +451,7 @@ const listPullRequestConversationAtom = githubRuntime.fn<{ readonly repository: 
 const getPullRequestMergeInfoAtom = githubRuntime.fn<{ readonly repository: string; readonly number: number }>()((input) =>
 	GitHubService.use((github) => github.getPullRequestMergeInfo(input.repository, input.number)),
 )
+const getRepositoryMergeMethodsAtom = githubRuntime.fn<string>()((repository) => GitHubService.use((github) => github.getRepositoryMergeMethods(repository)))
 const mergePullRequestAtom = githubRuntime.fn<{ readonly repository: string; readonly number: number; readonly action: PullRequestMergeAction }>()((input) =>
 	GitHubService.use((github) => github.mergePullRequest(input.repository, input.number, input.action)),
 )
@@ -456,6 +462,12 @@ const createPullRequestCommentAtom = githubRuntime.fn<CreatePullRequestCommentIn
 const submitPullRequestReviewAtom = githubRuntime.fn<SubmitPullRequestReviewInput>()((input) => GitHubService.use((github) => github.submitPullRequestReview(input)))
 const copyToClipboardAtom = githubRuntime.fn<string>()((text) => Clipboard.use((clipboard) => clipboard.copy(text)))
 const openInBrowserAtom = githubRuntime.fn<PullRequestItem>()((pullRequest) => BrowserOpener.use((browser) => browser.openPullRequest(pullRequest)))
+
+const pickInitialMergeMethod = (allowed: RepositoryMergeMethods | null, preferred: PullRequestMergeMethod | undefined): PullRequestMergeMethod => {
+	if (!allowed) return preferred ?? pullRequestMergeMethods[0]
+	if (preferred && allowed[preferred]) return preferred
+	return allowedMergeMethodList(allowed)[0] ?? pullRequestMergeMethods[0]
+}
 
 const centeredOffset = (outer: number, inner: number) => Math.floor((outer - inner) / 2)
 
@@ -687,6 +699,8 @@ export const App = () => {
 	themeIdRef.current = themeId
 	themeModalRef.current = themeModal
 	const setLabelCache = useAtomSet(labelCacheAtom)
+	const setRepoMergeMethodsCache = useAtomSet(repoMergeMethodsCacheAtom)
+	const setLastUsedMergeMethod = useAtomSet(lastUsedMergeMethodAtom)
 	const setPullRequestOverrides = useAtomSet(pullRequestOverridesAtom)
 	const setRecentlyCompletedPullRequests = useAtomSet(recentlyCompletedPullRequestsAtom)
 	const retryProgress = useAtomValue(retryProgressAtom)
@@ -706,6 +720,7 @@ export const App = () => {
 	const listPullRequestComments = useAtomSet(listPullRequestCommentsAtom, { mode: "promise" })
 	const listPullRequestConversation = useAtomSet(listPullRequestConversationAtom, { mode: "promise" })
 	const getPullRequestMergeInfo = useAtomSet(getPullRequestMergeInfoAtom, { mode: "promise" })
+	const getRepositoryMergeMethods = useAtomSet(getRepositoryMergeMethodsAtom, { mode: "promise" })
 	const mergePullRequest = useAtomSet(mergePullRequestAtom, { mode: "promise" })
 	const closePullRequest = useAtomSet(closePullRequestAtom, { mode: "promise" })
 	const createPullRequestComment = useAtomSet(createPullRequestCommentAtom, { mode: "promise" })
@@ -1988,6 +2003,11 @@ export const App = () => {
 		const repository = selectedPullRequest.repository
 		const number = selectedPullRequest.number
 		const seededInfo = mergeInfoFromPullRequest(selectedPullRequest)
+
+		const cachedAllowedMethods = registry.get(repoMergeMethodsCacheAtom)[repository] ?? null
+		const lastUsed = registry.get(lastUsedMergeMethodAtom)[repository]
+		const selectedMethod = pickInitialMergeMethod(cachedAllowedMethods, lastUsed)
+
 		setMergeModal({
 			repository,
 			number,
@@ -1996,7 +2016,11 @@ export const App = () => {
 			running: false,
 			info: seededInfo,
 			error: null,
+			selectedMethod,
+			allowedMethods: cachedAllowedMethods,
+			pendingConfirm: null,
 		})
+
 		void getPullRequestMergeInfo({ repository, number })
 			.then((info) => {
 				setMergeModal((current) => (current.repository === repository && current.number === number ? { ...current, loading: false, info, selectedIndex: 0 } : current))
@@ -2004,36 +2028,122 @@ export const App = () => {
 			.catch((error) => {
 				setMergeModal((current) => (current.repository === repository && current.number === number ? { ...current, loading: false, error: errorMessage(error) } : current))
 			})
+
+		if (!cachedAllowedMethods) {
+			void getRepositoryMergeMethods(repository)
+				.then((methods) => {
+					setRepoMergeMethodsCache((current) => ({ ...current, [repository]: methods }))
+					setMergeModal((current) => {
+						if (current.repository !== repository || current.number !== number) return current
+						const nextSelected = pickInitialMergeMethod(methods, registry.get(lastUsedMergeMethodAtom)[repository])
+						return { ...current, allowedMethods: methods, selectedMethod: nextSelected }
+					})
+				})
+				.catch((error) => {
+					setMergeModal((current) =>
+						current.repository === repository && current.number === number ? { ...current, error: `Unable to load repository merge methods: ${errorMessage(error)}` } : current,
+					)
+				})
+		}
 	}
 
-	const confirmMergeAction = () => {
-		if (!mergeModal.info || mergeModal.loading || mergeModal.running) return
-		const options = availableMergeActions(mergeModal.info)
-		const option = options[mergeModal.selectedIndex]
-		if (!option) return
-
-		const { repository, number } = mergeModal.info
+	const executeMergeAction = (
+		kindDef: ReturnType<typeof getMergeKindDefinition>,
+		method: PullRequestMergeMethod,
+		info: NonNullable<typeof mergeModal.info>,
+		markReady: boolean,
+	) => {
+		const { repository, number } = info
 		const targetPullRequest = pullRequests.find((pullRequest) => pullRequest.repository === repository && pullRequest.number === number)
 		const previousPullRequest = targetPullRequest ?? null
 
-		if (targetPullRequest && option.optimisticAutoMergeEnabled !== undefined) {
-			updatePullRequest(targetPullRequest.url, (pullRequest) => ({ ...pullRequest, autoMergeEnabled: option.optimisticAutoMergeEnabled! }))
+		if (targetPullRequest && markReady) {
+			updatePullRequest(targetPullRequest.url, (pullRequest) => (pullRequest.reviewStatus === "draft" ? { ...pullRequest, reviewStatus: "none" } : pullRequest))
 		}
-		if (targetPullRequest && option.optimisticState === "merged") markPullRequestCompleted(targetPullRequest, "merged")
+		if (targetPullRequest && kindDef.optimisticAutoMergeEnabled !== undefined) {
+			updatePullRequest(targetPullRequest.url, (pullRequest) => ({ ...pullRequest, autoMergeEnabled: kindDef.optimisticAutoMergeEnabled! }))
+		}
+		if (targetPullRequest && kindDef.optimisticState === "merged") markPullRequestCompleted(targetPullRequest, "merged")
+
+		const kind = kindDef.kind
+		const action: PullRequestMergeAction = kind === "disable-auto" ? { kind } : { kind, method }
+		const pastTense = kindDef.pastTense(method)
 
 		closeActiveModal()
-		void mergePullRequest({ repository, number, action: option.action })
+		if (!kindDef.methodAgnostic) {
+			setLastUsedMergeMethod((current) => ({ ...current, [repository]: method }))
+		}
+
+		let markedReady = false
+		const run = async () => {
+			if (markReady) {
+				await toggleDraftStatus({ repository, number, isDraft: true })
+				markedReady = true
+			}
+			await mergePullRequest({ repository, number, action })
+		}
+
+		void run()
 			.then(() => {
-				if (option.refreshOnSuccess) {
-					refreshPullRequests(`${option.pastTense} #${number}`)
+				if (kindDef.refreshOnSuccess) {
+					refreshPullRequests(`${pastTense} #${number}`)
 				} else {
-					flashNotice(`${option.pastTense} #${number}`)
+					flashNotice(`${pastTense} #${number}`)
 				}
 			})
 			.catch((error) => {
-				if (previousPullRequest) restoreOptimisticPullRequest(previousPullRequest)
+				if (markReady && markedReady) {
+					refreshPullRequests(`Merge failed for #${number}`)
+				} else if (previousPullRequest) {
+					restoreOptimisticPullRequest(previousPullRequest)
+				}
 				flashNotice(errorMessage(error))
 			})
+	}
+
+	const confirmMergeAction = () => {
+		if (!mergeModal.info || !mergeModal.allowedMethods || mergeModal.loading || mergeModal.running) return
+
+		// Second confirm: enter while pending executes the queued action with mark-ready.
+		if (mergeModal.pendingConfirm) {
+			const pending = mergeModal.pendingConfirm
+			const kindDef = getMergeKindDefinition(pending.kind)
+			executeMergeAction(kindDef, pending.method, mergeModal.info, /* markReady = */ true)
+			return
+		}
+
+		const selectedMethod = mergeModal.selectedMethod
+		const kinds = visibleMergeKinds(mergeModal.info, mergeModal.allowedMethods, selectedMethod)
+		const kind = kinds[mergeModal.selectedIndex]
+		if (!kind) return
+
+		// Draft PR + non-agnostic kind → enter confirm mode rather than merge immediately.
+		if (requiresMarkReady(mergeModal.info, kind)) {
+			setMergeModal((current) => ({ ...current, pendingConfirm: { kind: kind.kind, method: selectedMethod } }))
+			return
+		}
+
+		executeMergeAction(kind, selectedMethod, mergeModal.info, /* markReady = */ false)
+	}
+
+	const cancelOrCloseMergeModal = () => {
+		if (mergeModal.pendingConfirm) {
+			setMergeModal((current) => ({ ...current, pendingConfirm: null }))
+			return
+		}
+		closeActiveModal()
+	}
+
+	const cycleMergeMethod = (delta: -1 | 1) => {
+		setMergeModal((current) => {
+			if (current.pendingConfirm) return current
+			if (!current.allowedMethods) return current
+			const allowed = allowedMergeMethodList(current.allowedMethods)
+			if (allowed.length <= 1) return current
+			const currentIndex = Math.max(0, allowed.indexOf(current.selectedMethod))
+			const nextMethod = allowed[wrapIndex(currentIndex + delta, allowed.length)]!
+			return { ...current, selectedMethod: nextMethod, selectedIndex: 0 }
+		})
 	}
 
 	const toggleLabelAtIndex = () => {
@@ -2275,8 +2385,9 @@ export const App = () => {
 	// === Helpers used by the keymap layers ===
 	const moveMergeSelection = (delta: -1 | 1) =>
 		setMergeModal((current) => {
-			const options = availableMergeActions(current.info)
-			const selectedIndex = wrapIndex(current.selectedIndex + delta, options.length)
+			if (current.pendingConfirm) return current
+			const kinds = visibleMergeKinds(current.info, current.allowedMethods, current.selectedMethod)
+			const selectedIndex = wrapIndex(current.selectedIndex + delta, kinds.length)
 			return selectedIndex === current.selectedIndex ? current : { ...current, selectedIndex }
 		})
 	const scrollCommentThread = (delta: number) =>
@@ -2410,9 +2521,12 @@ export const App = () => {
 			moveSelection: movePullRequestStateSelection,
 		},
 		mergeModal: {
-			availableActionCount: availableMergeActions(mergeModal.info).length,
-			closeModal: closeActiveModal,
+			availableActionCount: visibleMergeKinds(mergeModal.info, mergeModal.allowedMethods, mergeModal.selectedMethod).length,
+			multipleMethodsAllowed: mergeModal.allowedMethods ? allowedMergeMethodList(mergeModal.allowedMethods).length > 1 : false,
+			inConfirmMode: mergeModal.pendingConfirm !== null,
+			closeOrBackOut: cancelOrCloseMergeModal,
 			confirmMerge: confirmMergeAction,
+			cycleMethod: cycleMergeMethod,
 			moveSelection: moveMergeSelection,
 		},
 		commentThreadModal: {
@@ -2757,7 +2871,7 @@ export const App = () => {
 	const submitReviewModalLeft = submitReviewLayout.left
 	const submitReviewModalTop = submitReviewLayout.top
 	const commentAnchorLabel = selectedDiffCommentAnchor && selectedDiffCommentLabel ? `${selectedDiffCommentAnchor.path} ${selectedDiffCommentLabel}` : "No diff line selected"
-	const mergeLayout = sizedModal(46, 68, 12, 16)
+	const mergeLayout = sizedModal(46, 68, 14, 20)
 	const mergeModalWidth = mergeLayout.width
 	const mergeModalHeight = mergeLayout.height
 	const mergeModalLeft = mergeLayout.left

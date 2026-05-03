@@ -14,10 +14,11 @@ import {
 	type PullRequestPage,
 	type PullRequestQueueMode,
 	type PullRequestReviewComment,
+	type RepositoryMergeMethods,
 	type ReviewStatus,
 	type SubmitPullRequestReviewInput,
 } from "../domain.js"
-import { getMergeActionDefinition } from "../mergeActions.js"
+import { mergeActionCliArgs } from "../mergeActions.js"
 import { CommandError, CommandRunner, type JsonParseError } from "./CommandRunner.js"
 
 const NullableString = Schema.NullOr(Schema.String)
@@ -120,6 +121,12 @@ const RepositoryPullRequestsResponseSchema = Schema.Struct({
 
 const ViewerSchema = Schema.Struct({ login: Schema.String })
 
+const RepositoryMergeMethodsResponseSchema = Schema.Struct({
+	squashMergeAllowed: Schema.Boolean,
+	mergeCommitAllowed: Schema.Boolean,
+	rebaseMergeAllowed: Schema.Boolean,
+})
+
 const MergeInfoResponseSchema = Schema.Struct({
 	number: Schema.Number,
 	title: Schema.String,
@@ -129,6 +136,14 @@ const MergeInfoResponseSchema = Schema.Struct({
 	reviewDecision: NullableString,
 	autoMergeRequest: Schema.NullOr(Schema.Unknown),
 	statusCheckRollup: Schema.Array(RawCheckContextSchema),
+})
+
+const PullRequestAdminMergeResponseSchema = Schema.Struct({
+	data: Schema.Struct({
+		repository: Schema.Struct({
+			pullRequest: Schema.NullOr(Schema.Struct({ viewerCanMergeAsAdmin: Schema.Boolean })),
+		}),
+	}),
 })
 
 const PullRequestCommentSchema = Schema.Struct({
@@ -555,6 +570,7 @@ export class GitHubService extends Context.Service<
 		readonly listPullRequestComments: (repository: string, number: number) => Effect.Effect<readonly PullRequestReviewComment[], GitHubError>
 		readonly listPullRequestConversation: (repository: string, number: number) => Effect.Effect<readonly PullRequestConversationItem[], GitHubError>
 		readonly getPullRequestMergeInfo: (repository: string, number: number) => Effect.Effect<PullRequestMergeInfo, GitHubError>
+		readonly getRepositoryMergeMethods: (repository: string) => Effect.Effect<RepositoryMergeMethods, GitHubError>
 		readonly mergePullRequest: (repository: string, number: number, action: PullRequestMergeAction) => Effect.Effect<void, CommandError>
 		readonly closePullRequest: (repository: string, number: number) => Effect.Effect<void, CommandError>
 		readonly createPullRequestComment: (input: CreatePullRequestCommentInput) => Effect.Effect<PullRequestReviewComment, GitHubError>
@@ -707,7 +723,7 @@ export class GitHubService extends Context.Service<
 			})
 
 			const getPullRequestMergeInfo = Effect.fn("GitHubService.getPullRequestMergeInfo")(function* (repository: string, number: number) {
-				const info = yield* command.runSchema(MergeInfoResponseSchema, "gh", [
+				const info = yield* ghJson("getPullRequestMergeInfo", MergeInfoResponseSchema, [
 					"pr",
 					"view",
 					String(number),
@@ -717,6 +733,21 @@ export class GitHubService extends Context.Service<
 					"number,title,state,isDraft,mergeable,reviewDecision,autoMergeRequest,statusCheckRollup",
 				])
 				const checkInfo = getCheckInfoFromContexts(info.statusCheckRollup)
+				const repo = repositoryParts(repository)
+				const adminInfo = repo
+					? yield* ghJson("getPullRequestAdminMergeInfo", PullRequestAdminMergeResponseSchema, [
+							"api",
+							"graphql",
+							"-F",
+							`owner=${repo.owner}`,
+							"-F",
+							`name=${repo.name}`,
+							"-F",
+							`number=${number}`,
+							"-f",
+							"query=query($owner: String!, $name: String!, $number: Int!) { repository(owner: $owner, name: $name) { pullRequest(number: $number) { viewerCanMergeAsAdmin } } }",
+						])
+					: null
 
 				return {
 					repository,
@@ -729,11 +760,27 @@ export class GitHubService extends Context.Service<
 					checkStatus: checkInfo.checkStatus,
 					checkSummary: checkInfo.checkSummary,
 					autoMergeEnabled: info.autoMergeRequest !== null,
+					viewerCanMergeAsAdmin: adminInfo?.data.repository.pullRequest?.viewerCanMergeAsAdmin ?? false,
 				} satisfies PullRequestMergeInfo
 			})
 
+			const getRepositoryMergeMethods = Effect.fn("GitHubService.getRepositoryMergeMethods")(function* (repository: string) {
+				const response = yield* ghJson("getRepositoryMergeMethods", RepositoryMergeMethodsResponseSchema, [
+					"repo",
+					"view",
+					repository,
+					"--json",
+					"squashMergeAllowed,mergeCommitAllowed,rebaseMergeAllowed",
+				])
+				return {
+					squash: response.squashMergeAllowed,
+					merge: response.mergeCommitAllowed,
+					rebase: response.rebaseMergeAllowed,
+				} satisfies RepositoryMergeMethods
+			})
+
 			const mergePullRequest = (repository: string, number: number, action: PullRequestMergeAction) =>
-				ghVoid("mergePullRequest", ["pr", "merge", String(number), "--repo", repository, ...getMergeActionDefinition(action).cliArgs])
+				ghVoid("mergePullRequest", ["pr", "merge", String(number), "--repo", repository, ...mergeActionCliArgs(action)])
 
 			const closePullRequest = (repository: string, number: number) => ghVoid("closePullRequest", ["pr", "close", String(number), "--repo", repository])
 
@@ -785,6 +832,7 @@ export class GitHubService extends Context.Service<
 				listPullRequestComments,
 				listPullRequestConversation,
 				getPullRequestMergeInfo,
+				getRepositoryMergeMethods,
 				mergePullRequest,
 				closePullRequest,
 				createPullRequestComment,

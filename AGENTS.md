@@ -41,6 +41,10 @@
 - If formatting fails, run `bunx oxfmt src/ test/ dev/` or format only the touched files, then rerun `bun run format:check`.
 - CI enforces formatting with `bun run format:check`; do not rely on manual review to catch formatting drift.
 
+## UI Conventions
+
+- Modal dividers must connect to the side borders with junction characters (`├` / `┤`). When adding a horizontal divider inside a modal body, thread the divider's row index through `ModalFrame`'s `junctionRows` so the side bars render `├`/`┤` at that row instead of `│`. Inline `<Divider>`s without a corresponding junction row look detached and are wrong.
+
 ## Future Work
 
 - Add a conversation panel focus/expand flow for reading and navigating longer PR conversations.

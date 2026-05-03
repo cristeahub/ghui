@@ -12,6 +12,7 @@ import type {
 	PullRequestReviewComment,
 	ReviewStatus,
 } from "../domain.js"
+import { mergeInfoFromPullRequest } from "../mergeActions.js"
 import { GitHubService } from "./GitHubService.js"
 
 export interface MockOptions {
@@ -166,19 +167,19 @@ export const MockGitHubService = {
 				getPullRequestDiff: (_repo, _number) => Effect.succeed(mockDiff),
 				listPullRequestComments: (_repo, _number) => Effect.succeed([] as readonly PullRequestReviewComment[]),
 				listPullRequestConversation: (repository, number) => Effect.succeed(conversationItems(repository, number)),
-				getPullRequestMergeInfo: (repository, number) =>
-					Effect.succeed({
+				getPullRequestMergeInfo: (repository, number) => {
+					const pr = findPullRequest(repository, number)
+					return Effect.succeed({
+						...mergeInfoFromPullRequest(pr),
 						repository,
 						number,
-						title: `Mock PR ${number}`,
-						state: "open",
-						isDraft: false,
 						mergeable: MERGEABLE_CYCLE[number % MERGEABLE_CYCLE.length]!,
-						reviewStatus: "approved",
+						reviewStatus: pr.reviewStatus === "draft" ? "approved" : pr.reviewStatus,
 						checkStatus: "passing",
 						checkSummary: "10/10",
-						autoMergeEnabled: false,
-					} satisfies PullRequestMergeInfo),
+					} satisfies PullRequestMergeInfo)
+				},
+				getRepositoryMergeMethods: () => Effect.succeed({ squash: true, merge: true, rebase: true }),
 				mergePullRequest: () => Effect.void,
 				closePullRequest: () => Effect.void,
 				createPullRequestComment: (input: CreatePullRequestCommentInput) =>

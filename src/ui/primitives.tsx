@@ -165,17 +165,39 @@ export type StandardModalDims = {
 	readonly rowWidth: number
 }
 
-export const standardModalDims = (modalWidth: number, modalHeight: number): StandardModalDims => {
+export const standardModalDims = (modalWidth: number, modalHeight: number, hasMiddleRow = false): StandardModalDims => {
 	const innerWidth = Math.max(16, modalWidth - 2)
 	const contentWidth = Math.max(14, innerWidth - 2)
-	const bodyHeight = Math.max(1, modalHeight - 7)
+	const fixedRows = hasMiddleRow ? 9 : 7
+	const bodyHeight = Math.max(1, modalHeight - fixedRows)
 	return { innerWidth, contentWidth, bodyHeight, rowWidth: innerWidth }
 }
+
+export type Token = {
+	readonly text: string
+	readonly fg: string
+	readonly bg?: string
+	readonly bold?: boolean
+}
+
+export const TokenLine = ({ tokens, separator = "  " }: { tokens: readonly Token[]; separator?: string }) => (
+	<TextLine>
+		{tokens.flatMap((token, idx) => {
+			const item = (
+				<span key={`tok-${idx}`} fg={token.fg} {...(token.bg === undefined ? {} : { bg: token.bg })} attributes={token.bold ? TextAttributes.BOLD : 0}>
+					{token.text}
+				</span>
+			)
+			return idx < tokens.length - 1 && separator.length > 0 ? [item, <span key={`sep-${idx}`}>{separator}</span>] : [item]
+		})}
+	</TextLine>
+)
 
 export type HintItem = {
 	readonly key: string
 	readonly label: string
 	readonly when?: boolean
+	readonly disabled?: boolean
 	readonly keyFg?: string
 }
 
@@ -183,12 +205,16 @@ export const HintRow = ({ items }: { items: readonly HintItem[] }) => {
 	const visible = items.filter((item) => item.when !== false)
 	return (
 		<TextLine>
-			{visible.flatMap((item, index) => [
-				<span key={`k${index}`} fg={item.keyFg ?? colors.count}>
-					{item.key}
-				</span>,
-				<span key={`l${index}`} fg={colors.muted}>{` ${item.label}${index < visible.length - 1 ? "  " : ""}`}</span>,
-			])}
+			{visible.flatMap((item, index) => {
+				const keyFg = item.disabled ? colors.separator : (item.keyFg ?? colors.count)
+				const labelFg = item.disabled ? colors.separator : colors.muted
+				return [
+					<span key={`k${index}`} fg={keyFg}>
+						{item.key}
+					</span>,
+					<span key={`l${index}`} fg={labelFg}>{` ${item.label}${index < visible.length - 1 ? "  " : ""}`}</span>,
+				]
+			})}
 		</TextLine>
 	)
 }
@@ -202,6 +228,7 @@ export const StandardModal = ({
 	titleFg = colors.accent,
 	headerRight,
 	subtitle,
+	middleRow,
 	footer,
 	bodyPadding = 0,
 	children,
@@ -214,15 +241,18 @@ export const StandardModal = ({
 	titleFg?: string
 	headerRight?: { readonly text: string; readonly pending?: boolean }
 	subtitle: React.ReactNode
+	middleRow?: React.ReactNode
 	footer: React.ReactNode
 	bodyPadding?: number
 	children: React.ReactNode
 }) => {
-	const { innerWidth, contentWidth, bodyHeight } = standardModalDims(width, height)
+	const hasMiddleRow = middleRow !== undefined && middleRow !== null && middleRow !== false
+	const { innerWidth, contentWidth, bodyHeight } = standardModalDims(width, height, hasMiddleRow)
 	const rightText = headerRight?.text ?? ""
 	const headerGap = Math.max(1, contentWidth - title.length - rightText.length)
+	const junctionRows = hasMiddleRow ? [2, 4, height - 4] : [2, height - 4]
 	return (
-		<ModalFrame left={left} top={top} width={width} height={height} junctionRows={[2, height - 4]}>
+		<ModalFrame left={left} top={top} width={width} height={height} junctionRows={junctionRows}>
 			<PaddedRow>
 				<TextLine>
 					<span fg={titleFg} attributes={TextAttributes.BOLD}>
@@ -238,6 +268,12 @@ export const StandardModal = ({
 			</PaddedRow>
 			<PaddedRow>{subtitle}</PaddedRow>
 			<Divider width={innerWidth} />
+			{hasMiddleRow ? (
+				<>
+					<PaddedRow>{middleRow}</PaddedRow>
+					<Divider width={innerWidth} />
+				</>
+			) : null}
 			<box height={bodyHeight} flexDirection="column" paddingLeft={bodyPadding} paddingRight={bodyPadding}>
 				{children}
 			</box>
