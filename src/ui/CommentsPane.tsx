@@ -2,12 +2,17 @@ import { useEffect, useMemo, useRef } from "react"
 import type { ScrollBoxRenderable } from "@opentui/core"
 import type { PullRequestComment, PullRequestItem } from "../domain.js"
 import { colors } from "./colors.js"
-import { commentBodyRows, commentCountText, commentMetaSegments, type CommentDisplayLine } from "./comments.js"
-import { centerCell, Divider, Filler, fitCell, HintRow, PaddedRow, PlainLine, TextLine, type HintItem } from "./primitives.js"
+import { commentBodyRows, commentCountText, commentMetaSegments, CommentSegmentsLine, type CommentDisplayLine, type CommentSegment } from "./comments.js"
+import { centerCell, Divider, Filler, HintRow, PaddedRow, PlainLine, TextLine, type HintItem } from "./primitives.js"
 import { shortRepoName } from "./pullRequests.js"
 
 const META_PREFIX_WIDTH = 2 // "• "
 const PLACEHOLDER_KEY = "__placeholder_new_comment"
+
+// Comments view always exposes one virtual "+ Add new comment" row at the
+// bottom, so the selectable row count is comments.length + this.
+export const COMMENTS_VIEW_PLACEHOLDER_ROWS = 1
+export const commentsViewRowCount = (count: number) => count + COMMENTS_VIEW_PLACEHOLDER_ROWS
 
 interface CommentBlock {
 	readonly key: string
@@ -108,20 +113,9 @@ const blockOffsets = (blocks: readonly CommentBlock[]): readonly number[] => {
 	return offsets
 }
 
-const renderSegmentSpan = (segment: { readonly text: string; readonly fg: string; readonly bold?: boolean }, key: number, fgOverride?: string) => {
-	const fg = fgOverride ?? segment.fg
-	if (segment.bold) {
-		return (
-			<span key={key} fg={fg} attributes={1}>
-				{segment.text}
-			</span>
-		)
-	}
-	return (
-		<span key={key} fg={fg}>
-			{segment.text}
-		</span>
-	)
+const withIndent = (segments: readonly CommentSegment[], indent: 0 | 1): readonly CommentSegment[] => {
+	const prefix = indent > 0 ? `   ` : ` `
+	return [{ text: prefix, fg: colors.muted }, ...segments]
 }
 
 export const CommentsPane = ({
@@ -148,7 +142,7 @@ export const CommentsPane = ({
 	const offsets = useMemo(() => blockOffsets(blocks), [blocks])
 	const scrollboxRef = useRef<ScrollBoxRenderable | null>(null)
 	const safeIndex = Math.max(0, Math.min(selectedIndex, blocks.length - 1))
-	const placeholderSelected = safeIndex === blocks.length - 1
+	const placeholderSelected = blocks[safeIndex]?.isPlaceholder ?? false
 
 	const headerLine = (() => {
 		const repo = shortRepoName(pullRequest.repository)
@@ -208,29 +202,23 @@ export const CommentsPane = ({
 					<scrollbox ref={scrollboxRef} focusable={false} flexGrow={1}>
 						{blocks.map((block, index) => {
 							const isSelected = index === safeIndex
-							const indent = " ".repeat(block.indent * 2)
 							if (block.isPlaceholder) {
 								return (
-									<box key={block.key} flexDirection="column">
-										<TextLine bg={isSelected ? colors.selectedBg : undefined}>
-											<span fg={isSelected ? colors.selectedText : colors.muted}> + Add new comment...</span>
-										</TextLine>
-									</box>
+									<TextLine key={block.key} bg={isSelected ? colors.selectedBg : undefined}>
+										<span fg={isSelected ? colors.selectedText : colors.muted}> + Add new comment...</span>
+									</TextLine>
 								)
 							}
 							return (
 								<box key={block.key} flexDirection="column">
-									<TextLine bg={isSelected ? colors.selectedBg : undefined}>
-										<span>{` ${indent}`}</span>
-										{block.meta.segments.map((segment, segmentIndex) => renderSegmentSpan(segment, segmentIndex, isSelected ? colors.selectedText : undefined))}
-									</TextLine>
+									<CommentSegmentsLine
+										segments={withIndent(block.meta.segments, block.indent)}
+										{...(isSelected ? { bg: colors.selectedBg, fgOverride: colors.selectedText } : {})}
+									/>
 									{block.body.map((line) => (
-										<TextLine key={line.key}>
-											<span>{` ${indent}`}</span>
-											{line.segments.map((segment, segmentIndex) => renderSegmentSpan(segment, segmentIndex))}
-										</TextLine>
+										<CommentSegmentsLine key={line.key} segments={withIndent(line.segments, block.indent)} />
 									))}
-									<PlainLine text={fitCell("", contentWidth)} fg={colors.muted} />
+									<PlainLine text="" fg={colors.muted} />
 								</box>
 							)
 						})}

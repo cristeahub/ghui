@@ -150,7 +150,7 @@ import {
 	type ThemeModalState,
 } from "./ui/modals.js"
 import { groupBy, pullRequestMetadataText } from "./ui/pullRequests.js"
-import { CommentsPane } from "./ui/CommentsPane.js"
+import { CommentsPane, commentsViewRowCount } from "./ui/CommentsPane.js"
 import { PullRequestDiffPane } from "./ui/PullRequestDiffPane.js"
 import { buildPullRequestListRows, pullRequestListRowIndex, PullRequestList } from "./ui/PullRequestList.js"
 import { editSingleLineInput, isSingleLineInputKey, printableKeyText, singleLineText } from "./ui/singleLineInput.js"
@@ -1494,9 +1494,7 @@ export const App = () => {
 		setCommentsViewActive(false)
 	}
 
-	// The comments view exposes a virtual "+ Add new comment" row at the end, so
-	// the selectable range is comments.length (inclusive — the placeholder).
-	const commentsRowCount = selectedComments.length + 1
+	const commentsRowCount = commentsViewRowCount(selectedComments.length)
 	const moveCommentsSelection = (delta: number) => {
 		setCommentsViewSelection((current) => {
 			const max = commentsRowCount - 1
@@ -1868,30 +1866,22 @@ export const App = () => {
 		setCommentModal({ ...initialCommentModalState, target: { kind: "reply", inReplyTo: comment.id, anchorLabel: anchor } })
 	}
 
-	const submitIssueComment = () => {
-		if (!selectedPullRequest) return
-		const body = commentModal.body.trim()
-		if (body.length === 0) {
-			setCommentModal((current) => ({ ...current, error: "Write a comment before saving." }))
-			return
-		}
-		const { repository, number } = selectedPullRequest
-		const key = pullRequestDiffKey(selectedPullRequest)
-		const optimistic: PullRequestComment = {
-			_tag: "comment",
-			id: `local:issue:${Date.now()}`,
-			author: username ?? "you",
-			body,
-			createdAt: new Date(),
-			url: null,
-		}
+	// Optimistic insert + post + swap-or-revert. Shared by issue and reply.
+	const submitOptimisticComment = (input: {
+		readonly key: string
+		readonly optimistic: PullRequestComment
+		readonly postingMessage: string
+		readonly successMessage: string
+		readonly request: () => Promise<PullRequestComment>
+	}) => {
+		const { key, optimistic, postingMessage, successMessage, request } = input
 		setPullRequestComments((current) => ({ ...current, [key]: [...(current[key] ?? []), optimistic] }))
 		closeActiveModal()
-		flashNotice(`Posting comment on #${number}`)
-		void createPullRequestIssueComment({ repository, number, body })
+		flashNotice(postingMessage)
+		void request()
 			.then((created) => {
 				setPullRequestComments((current) => ({ ...current, [key]: (current[key] ?? []).map((entry) => (entry.id === optimistic.id ? created : entry)) }))
-				flashNotice(`Commented on #${number}`)
+				flashNotice(successMessage)
 			})
 			.catch((error) => {
 				setPullRequestComments((current) => ({ ...current, [key]: (current[key] ?? []).filter((entry) => entry.id !== optimistic.id) }))
@@ -1899,44 +1889,55 @@ export const App = () => {
 			})
 	}
 
-	const submitReplyComment = () => {
-		if (!selectedPullRequest || commentModal.target.kind !== "reply") return
+	const requireCommentBody = (): string | null => {
 		const body = commentModal.body.trim()
 		if (body.length === 0) {
 			setCommentModal((current) => ({ ...current, error: "Write a comment before saving." }))
-			return
+			return null
 		}
+		return body
+	}
+
+	const submitIssueComment = () => {
+		if (!selectedPullRequest) return
+		const body = requireCommentBody()
+		if (body === null) return
+		const { repository, number } = selectedPullRequest
+		submitOptimisticComment({
+			key: pullRequestDiffKey(selectedPullRequest),
+			optimistic: { _tag: "comment", id: `local:issue:${Date.now()}`, author: username ?? "you", body, createdAt: new Date(), url: null },
+			postingMessage: `Posting comment on #${number}`,
+			successMessage: `Commented on #${number}`,
+			request: () => createPullRequestIssueComment({ repository, number, body }),
+		})
+	}
+
+	const submitReplyComment = () => {
+		if (!selectedPullRequest || commentModal.target.kind !== "reply") return
+		const body = requireCommentBody()
+		if (body === null) return
 		const { repository, number } = selectedPullRequest
 		const target = commentModal.target
-		const key = pullRequestDiffKey(selectedPullRequest)
 		const parent = selectedComments.find((entry) => entry._tag === "review-comment" && entry.id === target.inReplyTo)
-		const path = parent?._tag === "review-comment" ? parent.path : ""
-		const line = parent?._tag === "review-comment" ? parent.line : 0
-		const side = parent?._tag === "review-comment" ? parent.side : "RIGHT"
-		const optimistic: PullRequestComment = {
-			_tag: "review-comment",
-			id: `local:reply:${Date.now()}`,
-			path,
-			line,
-			side,
-			author: username ?? "you",
-			body,
-			createdAt: new Date(),
-			url: null,
-			inReplyTo: target.inReplyTo,
-		}
-		setPullRequestComments((current) => ({ ...current, [key]: [...(current[key] ?? []), optimistic] }))
-		closeActiveModal()
-		flashNotice(`Replying on ${target.anchorLabel}`)
-		void replyToReviewComment({ repository, number, inReplyTo: target.inReplyTo, body })
-			.then((created) => {
-				setPullRequestComments((current) => ({ ...current, [key]: (current[key] ?? []).map((entry) => (entry.id === optimistic.id ? created : entry)) }))
-				flashNotice(`Replied on ${target.anchorLabel}`)
-			})
-			.catch((error) => {
-				setPullRequestComments((current) => ({ ...current, [key]: (current[key] ?? []).filter((entry) => entry.id !== optimistic.id) }))
-				flashNotice(errorMessage(error))
-			})
+		const reviewParent = parent?._tag === "review-comment" ? parent : null
+		submitOptimisticComment({
+			key: pullRequestDiffKey(selectedPullRequest),
+			optimistic: {
+				_tag: "review-comment",
+				id: `local:reply:${Date.now()}`,
+				path: reviewParent?.path ?? "",
+				line: reviewParent?.line ?? 0,
+				side: reviewParent?.side ?? "RIGHT",
+				author: username ?? "you",
+				body,
+				createdAt: new Date(),
+				url: null,
+				inReplyTo: target.inReplyTo,
+			},
+			postingMessage: `Replying on ${target.anchorLabel}`,
+			successMessage: `Replied on ${target.anchorLabel}`,
+			request: () => replyToReviewComment({ repository, number, inReplyTo: target.inReplyTo, body }),
+		})
 	}
 
 	const submitCommentModal = () => {
