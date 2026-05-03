@@ -21,7 +21,7 @@
 	],
 	"files": [
 		"bin",
-		"src",
+		"dist",
 		"README.md",
 		".env.example",
 		"LICENSE"
@@ -35,6 +35,7 @@
 		"ghui": "bin/ghui.js"
 	},
 	"scripts": {
+		"build:cli": "bun run dev/build-cli.ts",
 		"changeset": "npm exec --package @changesets/cli@2.31.0 -- changeset",
 		"changeset:status": "npm exec --package @changesets/cli@2.31.0 -- changeset status",
 		"changeset:version": "npm exec --package @changesets/cli@2.31.0 -- changeset version",
@@ -46,7 +47,9 @@
 		"typecheck": "tsc --noEmit",
 		"lint": "oxlint --tsconfig tsconfig.json src/ test/",
 		"format": "oxfmt src/ test/ dev/",
-		"format:check": "oxfmt --check src/ test/ dev/"
+		"format:check": "oxfmt --check src/ test/ dev/",
+		"package:smoke": "bun run dev/package-smoke.ts",
+		"prepack": "bun run build:cli"
 	},
 	"workspaces": [
 		".",
@@ -54,7 +57,6 @@
 	],
 	"dependencies": {
 		"@effect/atom-react": "4.0.0-beta.59",
-		"@ghui/keymap": "workspace:*",
 		"@opentui/core": "0.2.1",
 		"@opentui/react": "0.2.1",
 		"effect": "4.0.0-beta.59",

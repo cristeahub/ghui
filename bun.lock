@@ -6,7 +6,6 @@
       "name": "ghui",
       "dependencies": {
         "@effect/atom-react": "4.0.0-beta.59",
-        "@ghui/keymap": "workspace:*",
         "@opentui/core": "0.2.1",
         "@opentui/react": "0.2.1",
         "effect": "4.0.0-beta.59",
