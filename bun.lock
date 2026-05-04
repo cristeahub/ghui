@@ -6,6 +6,7 @@
       "name": "ghui",
       "dependencies": {
         "@effect/atom-react": "4.0.0-beta.59",
+        "@effect/sql-sqlite-bun": "4.0.0-beta.59",
         "@opentui/core": "0.2.1",
         "@opentui/react": "0.2.1",
         "effect": "4.0.0-beta.59",
@@ -34,6 +35,8 @@
     "@effect/atom-react": ["@effect/atom-react@4.0.0-beta.59", "", { "peerDependencies": { "effect": "^4.0.0-beta.59", "react": "^19.2.4", "scheduler": "*" } }, "sha512-VkznQz5c+Z/BLxX+hQNPzPOyUnLQjnbppFSNP7tbPru7HKR4ihzCDC6Xjbx87156MOrZ+JOa6shTMbmvGT5W0w=="],
 
     "@effect/language-service": ["@effect/language-service@0.85.1", "", { "bin": { "effect-language-service": "cli.js" } }, "sha512-EXnJjIy6zQ3nUO/MZ+ynWUb8B895KZPotd1++oTs9JjDkplwM7cb6zo8Zq2zU6piwq+KflO7amXbEfj1UMpHkw=="],
+
+    "@effect/sql-sqlite-bun": ["@effect/sql-sqlite-bun@4.0.0-beta.59", "", { "peerDependencies": { "effect": "^4.0.0-beta.59" } }, "sha512-qZWt2HeLgSY8ygEfwbldK9lJ5xg/WP4lgCp1VLlyE8BImSB5g1h+UbhitXr+pOIf+ry4Xmc4ycp7YwTBOFH5/A=="],
 
     "@ghui/keymap": ["@ghui/keymap@workspace:packages/keymap"],
 

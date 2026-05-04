@@ -8,6 +8,9 @@ const originalConsoleError = console.error
 console.error = (...args: unknown[]) => {
 	const first = args[0]
 	if (typeof first === "string" && first.includes("inside a test was not wrapped in act")) return
+	if (typeof first === "string" && first.includes("Cannot update a component")) {
+		throw new Error(first)
+	}
 	originalConsoleError(...args)
 }
 
@@ -129,15 +132,16 @@ describe("PR list scrolling", () => {
 		renderer.destroy()
 	})
 
-	test("details show summary and comments in one document", async () => {
+	test("details show comments summary in header without inlining comment bodies", async () => {
 		const { captureCharFrame, renderOnce, renderer } = await setupApp(120, 24)
 		const loaded = await settle(renderOnce, () => {
 			const frame = captureCharFrame()
-			return frame.includes("Line B") && frame.includes("Comments") && frame.includes("Top-level discussion")
+			return frame.includes("Line B") && frame.includes("Comments") && frame.includes("press c to view all")
 		})
 		expect(loaded).toBe(true)
 		const frame = captureCharFrame()
-		expect(frame.indexOf("Line B")).toBeLessThan(frame.indexOf("Comments"))
+		expect(frame.indexOf("Comments")).toBeLessThan(frame.indexOf("Line B"))
+		expect(frame).not.toContain("Top-level discussion")
 		renderer.destroy()
 	})
 

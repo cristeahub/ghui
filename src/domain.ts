@@ -2,7 +2,8 @@ import { Schema } from "effect"
 
 export type LoadStatus = "loading" | "ready" | "error"
 
-export type PullRequestState = "open" | "closed" | "merged"
+export const pullRequestStates = ["open", "closed", "merged"] as const
+export type PullRequestState = (typeof pullRequestStates)[number]
 
 export const pullRequestQueueModes = ["authored", "review", "assigned", "mentioned"] as const
 export type PullRequestUserQueueMode = (typeof pullRequestQueueModes)[number]
@@ -28,13 +29,17 @@ export const pullRequestQueueSearchQualifier = (mode: PullRequestQueueMode, repo
 	return mode === "repository" && repository ? qualifier : `${qualifier} archived:false`
 }
 
-export type CheckConclusion = "success" | "failure" | "neutral" | "skipped" | "cancelled" | "timed_out"
+export const checkConclusions = ["success", "failure", "neutral", "skipped", "cancelled", "timed_out"] as const
+export type CheckConclusion = (typeof checkConclusions)[number]
 
-export type CheckRunStatus = "completed" | "in_progress" | "queued" | "pending"
+export const checkRunStatuses = ["completed", "in_progress", "queued", "pending"] as const
+export type CheckRunStatus = (typeof checkRunStatuses)[number]
 
-export type CheckRollupStatus = "passing" | "pending" | "failing" | "none"
+export const checkRollupStatuses = ["passing", "pending", "failing", "none"] as const
+export type CheckRollupStatus = (typeof checkRollupStatuses)[number]
 
-export type ReviewStatus = "draft" | "approved" | "changes" | "review" | "none"
+export const reviewStatuses = ["draft", "approved", "changes", "review", "none"] as const
+export type ReviewStatus = (typeof reviewStatuses)[number]
 
 export type Mergeable = "mergeable" | "conflicting" | "unknown"
 

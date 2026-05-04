@@ -1,12 +1,23 @@
+import { homedir } from "node:os"
+import { join } from "node:path"
 import { Config, Effect } from "effect"
 
 const positiveIntOr = (fallback: number) => (value: number) => (Number.isFinite(value) && value > 0 ? value : fallback)
 
 const pageSizeOr = (fallback: number) => (value: number) => Math.min(100, positiveIntOr(fallback)(value))
 
+const defaultCachePath = () => join(process.env.XDG_CACHE_HOME ?? join(homedir(), ".cache"), "ghui", "cache.sqlite")
+
+const resolveCachePath = () => {
+	const value = process.env.GHUI_CACHE_PATH?.trim()
+	if (value === "off" || value === "0" || value === "false") return null
+	return value && value.length > 0 ? value : defaultCachePath()
+}
+
 const appConfig = Config.all({
 	prFetchLimit: Config.int("GHUI_PR_FETCH_LIMIT").pipe(Config.withDefault(200), Config.map(positiveIntOr(200))),
 	prPageSize: Config.int("GHUI_PR_PAGE_SIZE").pipe(Config.withDefault(50), Config.map(pageSizeOr(50))),
+	cachePath: Config.succeed(resolveCachePath()),
 })
 
 export const config = Effect.runSync(

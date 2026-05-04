@@ -1,6 +1,8 @@
 import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises"
 import { join } from "node:path"
 import { tmpdir } from "node:os"
+import { Effect } from "effect"
+import { CacheService } from "../src/services/CacheService.js"
 import { binaryPackageName as binaryPackageNameForTarget, currentReleaseTargetId, findReleaseTarget } from "./release-targets.js"
 
 type CommandResult = {
@@ -46,6 +48,21 @@ const assertInstalledPackage = async (projectDir: string) => {
 	assert(version.stdout.trim() === rootPackageJson.version, `Expected ghui --version to print ${rootPackageJson.version}, got ${JSON.stringify(version.stdout.trim())}`)
 }
 
+const assertCacheServiceOpens = async () => {
+	const dir = await mkdtemp(join(tmpdir(), "ghui-cache-smoke-"))
+	try {
+		const cached = await Effect.runPromise(
+			Effect.gen(function* () {
+				const cache = yield* CacheService
+				return yield* cache.readQueue("smoke", { _tag: "Queue", mode: "authored", repository: null })
+			}).pipe(Effect.provide(CacheService.layerSqliteFile(join(dir, "cache.sqlite")))),
+		)
+		assert(cached === null, "New cache database should start empty")
+	} finally {
+		await rm(dir, { recursive: true, force: true })
+	}
+}
+
 const tempRoot = await mkdtemp(join(tmpdir(), "ghui-package-smoke-"))
 try {
 	const packDir = join(tempRoot, "pack")
@@ -54,6 +71,7 @@ try {
 	await Promise.all([mkdir(packDir, { recursive: true }), mkdir(npmProject, { recursive: true }), mkdir(bunProject, { recursive: true })])
 
 	assert(binaryPackageName, `Unsupported package smoke platform: ${process.platform}-${process.arch}`)
+	await assertCacheServiceOpens()
 	await run(["bun", "run", "build:npm-packages"], root)
 
 	const packPackage = async (cwd: string) => {
