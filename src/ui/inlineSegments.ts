@@ -11,8 +11,8 @@ export interface InlinePalette {
 // dispatched to the right segment kind below; everything outside matches
 // becomes plain text. Order in the alternation is the order matches are
 // produced: code spans first so URLs inside backticks stay raw, then
-// `[label](url)`, then bare URLs, then `#NNN` refs.
-const INLINE_TOKEN = /(`(?:\\.|[^`])+`)|\[([^\]]+)\]\(([^)\s]+)\)|(https?:\/\/[^\s<>()[\]"'`]+)|(#\d+)/g
+// `[label](url)`, then `**strong**`, then bare URLs, then `#NNN` refs.
+const INLINE_TOKEN = /(`(?:\\.|[^`])+`)|\[([^\]]+)\]\(([^)\s]+)\)|\*\*([^*\n]+(?:\*(?!\*)[^*\n]*)*)\*\*|(https?:\/\/[^\s<>()[\]"'`]+)|(#\d+)/g
 
 // Punctuation we should slice off the END of a bare URL — e.g. so "see
 // https://example.com." doesn't treat the period as part of the link.
@@ -35,13 +35,15 @@ export const inlineSegments = (text: string, fg: string, bold: boolean, palette:
 		} else if (match[2] !== undefined && match[3] !== undefined) {
 			push({ text: match[2], fg: palette.link, bold, underline: true, url: match[3] })
 		} else if (match[4] !== undefined) {
-			const raw = match[4]
+			for (const segment of inlineSegments(match[4], fg, true, palette)) push(segment)
+		} else if (match[5] !== undefined) {
+			const raw = match[5]
 			const trail = raw.match(TRAILING_URL_PUNCTUATION)?.[0] ?? ""
 			const url = trail.length > 0 ? raw.slice(0, raw.length - trail.length) : raw
 			if (url.length > 0) push({ text: url, fg: palette.link, bold, underline: true, url })
 			if (trail.length > 0) push({ text: trail, fg, bold })
-		} else if (match[5] !== undefined) {
-			push({ text: match[5], fg: palette.count, bold })
+		} else if (match[6] !== undefined) {
+			push({ text: match[6], fg: palette.count, bold })
 		}
 
 		cursor = start + match[0].length

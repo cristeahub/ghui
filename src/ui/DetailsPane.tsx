@@ -4,7 +4,7 @@ import { Fragment, useEffect, useMemo, useState } from "react"
 import { formatRelativeDate } from "../date.js"
 import type { CheckItem, PullRequestComment, PullRequestItem } from "../domain.js"
 import { colors, type ThemeId } from "./colors.js"
-import { commentCountText, commentDisplayRows, CommentSegmentsLine, type CommentSegment } from "./comments.js"
+import { commentCountText, CommentSegmentsLine, type CommentSegment } from "./comments.js"
 import { diffStatText } from "./diff.js"
 import { DiffStats } from "./diffStats.js"
 import { collectUrlPositions, findUrlAt, inlineSegments, type InlinePalette } from "./inlineSegments.js"
@@ -17,7 +17,6 @@ const inlinePalette = (): InlinePalette => ({ text: colors.text, inlineCode: col
 const BODY_PADDING_LEFT = 1
 
 interface PreviewLine {
-	readonly divider?: boolean
 	readonly segments: readonly CommentSegment[]
 }
 
@@ -114,13 +113,98 @@ const wrapPreviewSegments = (segments: PreviewLine["segments"], width: number, i
 	return lines
 }
 
-const bodyPreview = (body: string, width: number, limit = DETAIL_BODY_LINES): Array<PreviewLine> => {
+const TABLE_SEPARATOR_CELL = /^:?-{3,}:?$/
+
+const splitTableCells = (line: string): readonly string[] | null => {
+	let text = line.trim()
+	if (!text.includes("|")) return null
+	if (text.startsWith("|")) text = text.slice(1)
+	if (text.endsWith("|")) text = text.slice(0, -1)
+	const cells = text.split("|").map((cell) => cell.trim())
+	return cells.length >= 2 ? cells : null
+}
+
+const isSeparatorCells = (cells: readonly string[] | null, columnCount: number) =>
+	cells !== null && cells.length === columnCount && cells.every((cell) => TABLE_SEPARATOR_CELL.test(cell))
+
+const markdownTableAt = (lines: readonly string[], index: number) => {
+	const headerLine = lines[index] ?? ""
+	if (!headerLine.includes("|")) return null
+	const header = splitTableCells(headerLine)
+	if (!header) return null
+	const separatorCells = splitTableCells(lines[index + 1] ?? "")
+	if (!isSeparatorCells(separatorCells, header.length)) return null
+	const rows: string[][] = [Array.from(header)]
+	let cursor = index + 2
+	while (cursor < lines.length) {
+		const cells = splitTableCells(lines[cursor] ?? "")
+		if (!cells || isSeparatorCells(cells, header.length)) break
+		const padded = cells.length === header.length ? cells.slice() : Array.from({ length: header.length }, (_, cellIndex) => cells[cellIndex] ?? "")
+		rows.push(padded)
+		cursor += 1
+	}
+	return { rows, nextIndex: cursor }
+}
+
+const segmentWidth = (segments: readonly CommentSegment[]) => segments.reduce((width, segment) => width + segment.text.length, 0)
+
+const BLANK_PREVIEW_LINE: PreviewLine = { segments: [{ text: "", fg: colors.muted }] }
+
+const padSegments = (segments: readonly CommentSegment[], width: number): readonly CommentSegment[] => {
+	const padding = Math.max(0, width - segmentWidth(segments))
+	return padding > 0 ? [...segments, { text: " ".repeat(padding), fg: colors.muted }] : segments
+}
+
+const tableColumnWidths = (rows: readonly (readonly string[])[], width: number) => {
+	const columns = rows[0]?.length ?? 0
+	const separatorWidth = Math.max(0, columns - 1) * 3
+	const available = Math.max(columns, width - separatorWidth)
+	const base = Math.max(1, Math.floor(available / columns))
+	let remainder = Math.max(0, available - base * columns)
+	return Array.from({ length: columns }, () => {
+		const extra = remainder > 0 ? 1 : 0
+		remainder -= extra
+		return base + extra
+	})
+}
+
+const tableDivider = (columnWidths: readonly number[]): PreviewLine => ({
+	segments: columnWidths.flatMap((columnWidth, index) => [
+		...(index === 0 ? [] : [{ text: "─┼─", fg: colors.separator }]),
+		{ text: "─".repeat(columnWidth), fg: colors.separator },
+	]),
+})
+
+const tableRows = (rows: readonly (readonly string[])[], width: number): Array<PreviewLine> => {
+	const columnWidths = tableColumnWidths(rows, width)
+	const output: Array<PreviewLine> = []
+	rows.forEach((row, rowIndex) => {
+		const isHeader = rowIndex === 0
+		const wrappedCells = row.map((cell, cellIndex) =>
+			wrapPreviewSegments(parseInlineSegments(cell, isHeader ? colors.count : colors.text, isHeader), Math.max(1, columnWidths[cellIndex] ?? 1)),
+		)
+		const rowHeight = Math.max(1, ...wrappedCells.map((cell) => cell.length))
+		for (let lineIndex = 0; lineIndex < rowHeight; lineIndex++) {
+			output.push({
+				segments: wrappedCells.flatMap((cell, cellIndex) => [
+					...(cellIndex === 0 ? [] : [{ text: " │ ", fg: colors.separator }]),
+					...padSegments(cell[lineIndex]?.segments ?? [], columnWidths[cellIndex] ?? 1),
+				]),
+			})
+		}
+		if (isHeader) output.push(tableDivider(columnWidths))
+	})
+	return output
+}
+
+export const bodyPreview = (body: string, width: number, limit = DETAIL_BODY_LINES): Array<PreviewLine> => {
 	const sourceLines = body.replace(/\r/g, "").split("\n")
 	const preview: Array<PreviewLine> = []
 	let inCodeBlock = false
 
-	for (const rawLine of sourceLines) {
+	for (let index = 0; index < sourceLines.length; index++) {
 		if (preview.length >= limit) break
+		const rawLine = sourceLines[index] ?? ""
 
 		const fence = codeFenceLine(rawLine)
 		if (fence) {
@@ -131,6 +215,23 @@ const bodyPreview = (body: string, width: number, limit = DETAIL_BODY_LINES): Ar
 		const line = inCodeBlock ? rawLine.replace(/\t/g, "  ") : rawLine.trim()
 		if (line.length === 0) continue
 
+		if (!inCodeBlock && rawLine.includes("|")) {
+			const table = markdownTableAt(sourceLines, index)
+			if (table) {
+				const previousIsBlank = segmentWidth(preview.at(-1)?.segments ?? []) === 0
+				if (preview.length > 0 && !previousIsBlank && preview.length < limit) {
+					preview.push(BLANK_PREVIEW_LINE)
+				}
+				if (preview.length >= limit) break
+				preview.push(...tableRows(table.rows, Math.max(16, width)).slice(0, limit - preview.length))
+				if (preview.length < limit) {
+					preview.push(BLANK_PREVIEW_LINE)
+				}
+				index = table.nextIndex - 1
+				continue
+			}
+		}
+
 		let text = line
 		let fg: string = colors.text
 		let bold = false
@@ -138,7 +239,7 @@ const bodyPreview = (body: string, width: number, limit = DETAIL_BODY_LINES): Ar
 
 		if (!inCodeBlock && /^#{1,6}\s+/.test(line)) {
 			if (preview.length > 0) {
-				preview.push({ segments: [{ text: "", fg: colors.muted }] })
+				preview.push(BLANK_PREVIEW_LINE)
 				if (preview.length >= limit) break
 			}
 			text = line.replace(/^#{1,6}\s+/, "")
@@ -180,11 +281,6 @@ const bodyPreview = (body: string, width: number, limit = DETAIL_BODY_LINES): Ar
 	return preview.slice(0, limit)
 }
 
-const previewDivider = (): PreviewLine => ({
-	divider: true,
-	segments: [],
-})
-
 const truncateFromStart = (text: string, width: number) => {
 	if (text.length <= width) return text
 	if (width <= 1) return "…".slice(0, Math.max(0, width))
@@ -214,69 +310,6 @@ export const truncateConversationPath = (path: string, width: number) => {
 	const suffixWidth = width - prefix.length - 3
 	if (suffixWidth < 1) return truncateFromStart(path, width)
 	return `${prefix}/…/${truncateFromStart(parts[parts.length - 1]!, suffixWidth)}`
-}
-
-const commentGroups = (item: PullRequestComment, width: number): readonly (readonly CommentSegment[])[] => {
-	if (item._tag !== "review-comment") return []
-	const pathWidth = Math.max(12, width - item.author.length - 20)
-	return [[{ text: truncateConversationPath(item.path, pathWidth), fg: colors.inlineCode }]]
-}
-
-const conversationPreview = ({
-	items,
-	status,
-	width,
-	limit,
-}: {
-	readonly items: readonly PullRequestComment[]
-	readonly status: DetailCommentsStatus
-	readonly width: number
-	readonly limit: number
-}): Array<PreviewLine> => {
-	if (status !== "ready" || items.length === 0 || limit <= 0) return []
-	const rows: Array<PreviewLine> = []
-	const title = "Comments"
-	const countText = commentCountText(items.length)
-	const gap = Math.max(2, width - title.length - countText.length)
-	rows.push({
-		segments: [
-			{ text: title, fg: colors.count, bold: true },
-			{ text: " ".repeat(gap), fg: colors.muted },
-			{ text: countText, fg: colors.muted },
-		],
-	})
-
-	for (const item of items) {
-		if (rows.length >= limit) break
-		rows.push(...commentDisplayRows({ item, width, groups: commentGroups(item, width) }).slice(0, limit - rows.length))
-	}
-
-	return rows.slice(0, limit)
-}
-
-const detailBodyPreview = ({
-	pullRequest,
-	contentWidth,
-	limit,
-	comments,
-	commentsStatus,
-}: {
-	readonly pullRequest: PullRequestItem
-	readonly contentWidth: number
-	readonly limit: number
-	readonly comments: readonly PullRequestComment[]
-	readonly commentsStatus: DetailCommentsStatus
-}) => {
-	const summaryRows = bodyPreview(pullRequest.body, contentWidth, limit)
-	const conversationRows = conversationPreview({
-		items: comments,
-		status: commentsStatus,
-		width: contentWidth,
-		limit: Math.max(0, limit - summaryRows.length - 1),
-	})
-
-	if (conversationRows.length === 0) return summaryRows
-	return [...summaryRows, previewDivider(), ...conversationRows].slice(0, limit)
 }
 
 const deduplicateChecks = (checks: readonly CheckItem[]): CheckItem[] => {
@@ -313,11 +346,6 @@ const checkKind = (check: CheckItem): CheckKind => {
 const checkIcon = (check: CheckItem) => CHECK_DISPLAY[checkKind(check)].icon
 
 const checkColor = (check: CheckItem) => CHECK_DISPLAY[checkKind(check)].color
-
-const checksRowCount = (checks: readonly CheckItem[]) => {
-	const unique = deduplicateChecks(checks)
-	return Math.ceil(unique.length / 2)
-}
 
 const ChecksSection = ({ checks, contentWidth }: { checks: readonly CheckItem[]; contentWidth: number }) => {
 	const unique = deduplicateChecks(checks)
@@ -361,74 +389,115 @@ const ChecksSection = ({ checks, contentWidth }: { checks: readonly CheckItem[];
 	)
 }
 
-const conversationDividerBodyRow = (pullRequest: PullRequestItem, contentWidth: number, comments: readonly PullRequestComment[], commentsStatus: DetailCommentsStatus) => {
-	if (!pullRequest.detailLoaded) return null
-	const dividerIndex = detailBodyPreview({ pullRequest, contentWidth, limit: DETAIL_BODY_SCROLL_LIMIT, comments, commentsStatus }).findIndex((line) => line.divider === true)
-	return dividerIndex >= 0 ? dividerIndex : null
+const CommentsSummarySection = ({ count, contentWidth }: { count: number; contentWidth: number }) => {
+	const label = "Comments"
+	const countText = commentCountText(count)
+	const hint = "press c to view all"
+	const right = `${countText} · ${hint}`
+	const gap = Math.max(1, contentWidth - label.length - right.length)
+	return (
+		<PaddedRow>
+			<TextLine>
+				<span fg={colors.count} attributes={TextAttributes.BOLD}>
+					{label}
+				</span>
+				<span fg={colors.muted}>{" ".repeat(gap)}</span>
+				<span fg={colors.muted}>{right}</span>
+			</TextLine>
+		</PaddedRow>
+	)
+}
+
+interface DetailHeaderLayout {
+	readonly titleLines: number
+	readonly uniqueChecks: readonly CheckItem[]
+	readonly hasChecks: boolean
+	readonly showCommentsSummary: boolean
+	readonly checkRowsCount: number
+	readonly checksHeight: number
+	readonly middleDividerHeight: number
+	readonly commentsHeight: number
+	readonly bottomDividerHeight: number
+	readonly headerDividerRow: number
+	readonly middleDividerRow: number
+	readonly bottomDividerRow: number
+	readonly headerHeight: number
+}
+
+const computeDetailHeaderLayout = (
+	pullRequest: PullRequestItem,
+	paneWidth: number,
+	showChecks: boolean,
+	comments: readonly PullRequestComment[],
+	commentsStatus: DetailCommentsStatus,
+): DetailHeaderLayout => {
+	const titleLines = wrapText(pullRequest.title, Math.max(1, paneWidth - 2)).length
+	const uniqueChecks = deduplicateChecks(pullRequest.checks)
+	const hasChecks = showChecks && uniqueChecks.length > 0
+	const showCommentsSummary = commentsStatus === "ready" && comments.length > 0
+	const checkRowsCount = Math.ceil(uniqueChecks.length / 2)
+	const checksHeight = hasChecks ? checkRowsCount + 1 : 0
+	const middleDividerHeight = hasChecks && showCommentsSummary ? 1 : 0
+	const commentsHeight = showCommentsSummary ? 1 : 0
+	const bottomDividerHeight = hasChecks || showCommentsSummary ? 1 : 0
+	const headerDividerRow = 1 + titleLines + 1
+	const middleDividerRow = middleDividerHeight === 1 ? headerDividerRow + checksHeight + 1 : -1
+	const bottomDividerRow = bottomDividerHeight === 1 ? headerDividerRow + checksHeight + middleDividerHeight + commentsHeight + 1 : -1
+	const headerHeight = titleLines + 3 + checksHeight + middleDividerHeight + commentsHeight + bottomDividerHeight
+	return {
+		titleLines,
+		uniqueChecks,
+		hasChecks,
+		showCommentsSummary,
+		checkRowsCount,
+		checksHeight,
+		middleDividerHeight,
+		commentsHeight,
+		bottomDividerHeight,
+		headerDividerRow,
+		middleDividerRow,
+		bottomDividerRow,
+		headerHeight,
+	}
 }
 
 export const getDetailJunctionRows = ({
 	pullRequest,
 	paneWidth,
 	showChecks = false,
-	contentWidth,
 	comments = [],
 	commentsStatus = "idle",
-	bodyScrollTop = 0,
-	bodyViewportHeight = Number.POSITIVE_INFINITY,
 }: {
 	readonly pullRequest: PullRequestItem | null
 	readonly paneWidth: number
 	readonly showChecks?: boolean
-	readonly contentWidth?: number
 	readonly comments?: readonly PullRequestComment[]
 	readonly commentsStatus?: DetailCommentsStatus
-	readonly bodyScrollTop?: number
-	readonly bodyViewportHeight?: number
 }): readonly number[] => {
 	if (!pullRequest) return [DETAIL_PLACEHOLDER_ROWS]
-	const resolvedContentWidth = contentWidth ?? Math.max(1, paneWidth - 2)
-	const titleLines = wrapText(pullRequest.title, Math.max(1, paneWidth - 2)).length
-	const detailDividerRow = 1 + titleLines + 1
-	const checks = deduplicateChecks(pullRequest.checks)
-	const checksDividerRow = checks.length > 0 ? detailDividerRow + 1 + checksRowCount(checks) + 1 : -1
-	const headerHeight = getDetailHeaderHeight(pullRequest, paneWidth, showChecks)
-	const conversationDivider = conversationDividerBodyRow(pullRequest, resolvedContentWidth, comments, commentsStatus)
-	const visibleConversationDivider = conversationDivider === null ? null : conversationDivider - Math.max(0, Math.floor(bodyScrollTop))
-	return [
-		detailDividerRow,
-		showChecks && checks.length > 0 ? checksDividerRow : -1,
-		visibleConversationDivider === null || visibleConversationDivider < 0 || visibleConversationDivider >= bodyViewportHeight ? -1 : headerHeight + visibleConversationDivider,
-	].filter((row) => row >= 0)
+	const layout = computeDetailHeaderLayout(pullRequest, paneWidth, showChecks, comments, commentsStatus)
+	return [layout.headerDividerRow, layout.middleDividerRow, layout.bottomDividerRow].filter((row) => row >= 0)
 }
 
-export const getDetailHeaderHeight = (pullRequest: PullRequestItem | null, paneWidth: number, showChecks = false) => {
-	if (!pullRequest) return DETAIL_PLACEHOLDER_ROWS + 1
-	const titleLines = wrapText(pullRequest.title, Math.max(1, paneWidth - 2)).length
-	const checks = deduplicateChecks(pullRequest.checks)
-	const checksHeight = showChecks && checks.length > 0 ? checksRowCount(checks) + 2 : 0
-	return titleLines + 3 + checksHeight
-}
-
-export const getDetailBodyHeight = (
+export const getDetailHeaderHeight = (
 	pullRequest: PullRequestItem | null,
-	contentWidth: number,
-	bodyLines = DETAIL_BODY_LINES,
+	paneWidth: number,
+	showChecks = false,
 	comments: readonly PullRequestComment[] = [],
 	commentsStatus: DetailCommentsStatus = "idle",
 ) => {
+	if (!pullRequest) return DETAIL_PLACEHOLDER_ROWS + 1
+	return computeDetailHeaderLayout(pullRequest, paneWidth, showChecks, comments, commentsStatus).headerHeight
+}
+
+export const getDetailBodyHeight = (pullRequest: PullRequestItem | null, contentWidth: number, bodyLines = DETAIL_BODY_LINES) => {
 	if (!pullRequest) return bodyLines
 	if (!pullRequest.detailLoaded) return bodyLines
-	return detailBodyPreview({ pullRequest, contentWidth, limit: bodyLines, comments, commentsStatus }).length
+	return bodyPreview(pullRequest.body, contentWidth, bodyLines).length
 }
 
-export const getScrollableDetailBodyHeight = (
-	pullRequest: PullRequestItem | null,
-	contentWidth: number,
-	comments: readonly PullRequestComment[] = [],
-	commentsStatus: DetailCommentsStatus = "idle",
-) => {
-	return getDetailBodyHeight(pullRequest, contentWidth, DETAIL_BODY_SCROLL_LIMIT, comments, commentsStatus)
+export const getScrollableDetailBodyHeight = (pullRequest: PullRequestItem | null, contentWidth: number) => {
+	return getDetailBodyHeight(pullRequest, contentWidth, DETAIL_BODY_SCROLL_LIMIT)
 }
 
 export const getDetailsPaneHeight = ({
@@ -449,7 +518,7 @@ export const getDetailsPaneHeight = ({
 	commentsStatus?: DetailCommentsStatus
 }) =>
 	pullRequest
-		? getDetailHeaderHeight(pullRequest, paneWidth, showChecks) + getDetailBodyHeight(pullRequest, contentWidth, bodyLines, comments, commentsStatus)
+		? getDetailHeaderHeight(pullRequest, paneWidth, showChecks, comments, commentsStatus) + getDetailBodyHeight(pullRequest, contentWidth, bodyLines)
 		: bodyLines + DETAIL_PLACEHOLDER_ROWS + 1
 
 export const DetailHeader = ({
@@ -458,17 +527,21 @@ export const DetailHeader = ({
 	contentWidth,
 	paneWidth,
 	showChecks = false,
+	comments = [],
+	commentsStatus = "idle",
 }: {
 	pullRequest: PullRequestItem
 	viewerUsername: string | null
 	contentWidth: number
 	paneWidth: number
 	showChecks?: boolean
+	comments?: readonly PullRequestComment[]
+	commentsStatus?: DetailCommentsStatus
 }) => {
 	const labels = pullRequest.labels
 	const wrappedTitle = wrapText(pullRequest.title, Math.max(1, paneWidth - 2))
-	const unique = deduplicateChecks(pullRequest.checks)
-	const checkRows = checksRowCount(unique)
+	const layout = computeDetailHeaderLayout(pullRequest, paneWidth, showChecks, comments, commentsStatus)
+	const { hasChecks, showCommentsSummary, checkRowsCount, bottomDividerHeight, middleDividerHeight } = layout
 	const statsText = diffStatText(pullRequest)
 	const labelsWidth = pullRequest.detailLoaded ? labels.reduce((total, label, index) => total + label.name.length + 2 + (index > 0 ? 1 : 0), 0) : 0
 	const hasLabelContent = labelsWidth > 0
@@ -526,19 +599,15 @@ export const DetailHeader = ({
 					) : null}
 				</TextLine>
 			</PaddedRow>
-			<box height={1}>
-				<Divider width={paneWidth} />
-			</box>
-			{showChecks && unique.length > 0 ? (
-				<>
-					<box height={checkRows + 1} paddingLeft={1} paddingRight={1}>
-						<ChecksSection checks={pullRequest.checks} contentWidth={contentWidth} />
-					</box>
-					<box height={1}>
-						<Divider width={paneWidth} />
-					</box>
-				</>
+			<Divider width={paneWidth} />
+			{hasChecks ? (
+				<box height={checkRowsCount + 1} paddingLeft={1} paddingRight={1}>
+					<ChecksSection checks={pullRequest.checks} contentWidth={contentWidth} />
+				</box>
 			) : null}
+			{middleDividerHeight === 1 ? <Divider width={paneWidth} /> : null}
+			{showCommentsSummary ? <CommentsSummarySection count={comments.length} contentWidth={contentWidth} /> : null}
+			{bottomDividerHeight === 1 ? <Divider width={paneWidth} /> : null}
 		</>
 	)
 }
@@ -546,22 +615,16 @@ export const DetailHeader = ({
 export const DetailBody = ({
 	pullRequest,
 	contentWidth,
-	paneWidth = contentWidth + 2,
 	bodyLines = DETAIL_BODY_LINES,
 	bodyLineLimit = bodyLines,
-	comments = [],
-	commentsStatus = "idle",
 	loadingIndicator,
 	themeId,
 	onLinkOpen,
 }: {
 	pullRequest: PullRequestItem
 	contentWidth: number
-	paneWidth?: number
 	bodyLines?: number
 	bodyLineLimit?: number
-	comments?: readonly PullRequestComment[]
-	commentsStatus?: DetailCommentsStatus
 	loadingIndicator: string
 	themeId: ThemeId
 	onLinkOpen?: (url: string) => void
@@ -569,10 +632,7 @@ export const DetailBody = ({
 	const renderer = useRenderer()
 	const [hoveredUrl, setHoveredUrl] = useState<string | null>(null)
 
-	const previewLines = useMemo(
-		() => detailBodyPreview({ pullRequest, contentWidth, limit: bodyLineLimit, comments, commentsStatus }),
-		[pullRequest, contentWidth, bodyLineLimit, comments, commentsStatus, themeId],
-	)
+	const previewLines = useMemo(() => bodyPreview(pullRequest.body, contentWidth, bodyLineLimit), [pullRequest, contentWidth, bodyLineLimit, themeId])
 
 	const urlPositions = useMemo(() => collectUrlPositions(previewLines), [previewLines])
 
@@ -618,15 +678,11 @@ export const DetailBody = ({
 
 	return (
 		<box flexDirection="column" height={previewLines.length} onMouseMove={handleMouseMove} onMouseOut={handleMouseOut} onMouseDown={handleMouseDown}>
-			{previewLines.map((line, index) =>
-				line.divider === true ? (
-					<Divider key={`${pullRequest.url}-${index}`} width={paneWidth} />
-				) : (
-					<PaddedRow key={`${pullRequest.url}-${index}`}>
-						<CommentSegmentsLine segments={line.segments} hoveredUrl={hoveredUrl} />
-					</PaddedRow>
-				),
-			)}
+			{previewLines.map((line, index) => (
+				<PaddedRow key={`${pullRequest.url}-${index}`}>
+					<CommentSegmentsLine segments={line.segments} hoveredUrl={hoveredUrl} />
+				</PaddedRow>
+			))}
 		</box>
 	)
 }
@@ -663,9 +719,7 @@ export const StatusCard = ({ content, width }: { content: DetailPlaceholderConte
 export const DetailPlaceholder = ({ content, paneWidth }: { content: DetailPlaceholderContent; paneWidth: number }) => (
 	<box flexDirection="column">
 		<StatusCard content={content} width={paneWidth} />
-		<box height={1}>
-			<Divider width={paneWidth} />
-		</box>
+		<Divider width={paneWidth} />
 	</box>
 )
 
@@ -717,15 +771,20 @@ export const DetailsPane = ({
 		<box flexDirection="column" height={contentHeight}>
 			{pullRequest ? (
 				<>
-					<DetailHeader pullRequest={pullRequest} viewerUsername={viewerUsername} contentWidth={contentWidth} paneWidth={paneWidth} showChecks={showChecks} />
+					<DetailHeader
+						pullRequest={pullRequest}
+						viewerUsername={viewerUsername}
+						contentWidth={contentWidth}
+						paneWidth={paneWidth}
+						showChecks={showChecks}
+						comments={comments}
+						commentsStatus={commentsStatus}
+					/>
 					<DetailBody
 						pullRequest={pullRequest}
 						contentWidth={contentWidth}
-						paneWidth={paneWidth}
 						bodyLines={bodyLines}
 						bodyLineLimit={bodyLineLimit}
-						comments={comments}
-						commentsStatus={commentsStatus}
 						loadingIndicator={loadingIndicator}
 						themeId={themeId}
 						{...(onLinkOpen ? { onLinkOpen } : {})}

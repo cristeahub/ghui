@@ -67,6 +67,28 @@ describe("inlineSegments — markdown links", () => {
 	})
 })
 
+describe("inlineSegments — markdown strong emphasis", () => {
+	test("double-star text is unwrapped and bold", () => {
+		expect(parse("This is **important text** now")).toEqual([
+			{ text: "This is ", fg: "fg-text", bold: false },
+			{ text: "important text", fg: "fg-text", bold: true },
+			{ text: " now", fg: "fg-text", bold: false },
+		])
+	})
+
+	test("bold marker preserves existing bold context", () => {
+		expect(parseBold("**already bold**")).toEqual([{ text: "already bold", fg: "fg-text", bold: true }])
+	})
+
+	test("code spans win over stars inside code", () => {
+		expect(parse("`**raw**`")).toEqual([{ text: "**raw**", fg: "fg-code", bold: false }])
+	})
+
+	test("code spans inside bold markers are unwrapped too", () => {
+		expect(parse("**`Session.Service.get`**")).toEqual([{ text: "Session.Service.get", fg: "fg-code", bold: true }])
+	})
+})
+
 describe("inlineSegments — bare URLs", () => {
 	test("bare https URL becomes a link with itself as the url", () => {
 		expect(parse("check https://example.com")).toEqual([

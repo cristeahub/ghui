@@ -8,7 +8,7 @@ import { Cause, Effect, Layer, Schedule } from "effect"
 import * as AsyncResult from "effect/unstable/reactivity/AsyncResult"
 import * as Atom from "effect/unstable/reactivity/Atom"
 import * as AtomRegistry from "effect/unstable/reactivity/AtomRegistry"
-import { useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react"
+import { useContext, useEffect, useMemo, useRef, useState } from "react"
 import { buildAppCommands } from "./appCommands.js"
 import type { AppCommand } from "./commands.js"
 import { clampCommandIndex, type CommandScope, commandEnabled, defineCommand, filterCommands, sortCommandsByActiveScope } from "./commands.js"
@@ -33,6 +33,7 @@ import { errorMessage } from "./errors.js"
 import { getMergeKindDefinition, mergeInfoFromPullRequest, requiresMarkReady, visibleMergeKinds } from "./mergeActions.js"
 import { Observability } from "./observability.js"
 import { mergeCachedDetails } from "./pullRequestCache.js"
+import type { PullRequestLoad } from "./pullRequestLoad.js"
 import {
 	activePullRequestViews,
 	initialPullRequestView,
@@ -46,6 +47,7 @@ import {
 	viewRepository,
 } from "./pullRequestViews.js"
 import { BrowserOpener } from "./services/BrowserOpener.js"
+import { CacheService, type PullRequestCacheKey } from "./services/CacheService.js"
 import { Clipboard } from "./services/Clipboard.js"
 import { CommandRunner } from "./services/CommandRunner.js"
 import { GitHubService } from "./services/GitHubService.js"
@@ -172,19 +174,16 @@ const githubServiceLayer =
 				repoCount: parseOptionalPositiveInt(process.env.GHUI_MOCK_REPO_COUNT, 4) ?? 4,
 			})
 		: GitHubService.layerNoDeps
+const cacheServiceLayer = mockPrCount !== null ? CacheService.disabledLayer : CacheService.layerFromPath(config.cachePath)
 
 const githubRuntime = Atom.runtime(
-	Layer.mergeAll(githubServiceLayer, Clipboard.layerNoDeps, BrowserOpener.layerNoDeps).pipe(Layer.provide(CommandRunner.layer), Layer.provideMerge(Observability.layer)),
+	Layer.mergeAll(githubServiceLayer, cacheServiceLayer, Clipboard.layerNoDeps, BrowserOpener.layerNoDeps).pipe(
+		Layer.provide(CommandRunner.layer),
+		Layer.provideMerge(Observability.layer),
+	),
 )
 const [initialThemeId, initialDiffWhitespaceMode] = await Promise.all([Effect.runPromise(loadStoredThemeId), Effect.runPromise(loadStoredDiffWhitespaceMode)])
-
-interface PullRequestLoad {
-	readonly view: PullRequestView
-	readonly data: readonly PullRequestItem[]
-	readonly fetchedAt: Date | null
-	readonly endCursor: string | null
-	readonly hasNextPage: boolean
-}
+setActiveTheme(initialThemeId)
 
 interface DetailPlaceholderInput {
 	readonly status: LoadStatus
@@ -246,6 +245,8 @@ const appendPullRequestPage = (existing: readonly PullRequestItem[], incoming: r
 	return [...existing, ...mergedIncoming.filter((pullRequest) => !seen.has(pullRequest.url))]
 }
 
+const cacheViewerFor = (view: PullRequestView, username: string | null) => (view._tag === "Repository" ? "anonymous" : username)
+
 const retryProgressAtom = Atom.make<RetryProgress>(initialRetryProgress).pipe(Atom.keepAlive)
 const activeViewAtom = Atom.make<PullRequestView>(initialPullRequestView()).pipe(Atom.keepAlive)
 const queueLoadCacheAtom = Atom.make<Partial<Record<string, PullRequestLoad>>>({}).pipe(Atom.keepAlive)
@@ -260,10 +261,20 @@ const pullRequestsAtom = githubRuntime
 	.atom(
 		GitHubService.use((github) =>
 			Effect.gen(function* () {
+				const cacheService = yield* CacheService
 				const view = yield* Atom.get(activeViewAtom)
 				const queueMode = viewMode(view)
 				const repository = viewRepository(view)
 				const cacheKey = viewCacheKey(view)
+				const cacheUsername = view._tag === "Repository" ? null : yield* github.getAuthenticatedUser().pipe(Effect.catch(() => Effect.succeed(null)))
+				const cacheViewer = cacheViewerFor(view, cacheUsername)
+				if (cacheViewer) {
+					const cachedLoad = yield* cacheService.readQueue(cacheViewer, view).pipe(Effect.catch(() => Effect.succeed(null)))
+					if (cachedLoad) {
+						const cache = yield* Atom.get(queueLoadCacheAtom)
+						yield* Atom.set(queueLoadCacheAtom, trimQueueLoadCache({ ...cache, [cacheKey]: cachedLoad }))
+					}
+				}
 				yield* Atom.set(retryProgressAtom, initialRetryProgress)
 				const page = yield* github
 					.listOpenPullRequestPage({
@@ -300,6 +311,7 @@ const pullRequestsAtom = githubRuntime
 				delete nextCache[cacheKey]
 				nextCache[cacheKey] = load
 				yield* Atom.set(queueLoadCacheAtom, trimQueueLoadCache(nextCache))
+				if (cacheViewer) yield* cacheService.writeQueue(cacheViewer, load)
 				return load
 			}),
 		),
@@ -359,7 +371,8 @@ const pullRequestStatusAtom = Atom.make((get): LoadStatus => {
 	const load = get(pullRequestLoadAtom)
 	const isLoadingQueue = get(isLoadingQueueModeAtom)
 	if ((result.waiting || isLoadingQueue) && load === null) return "loading"
-	return AsyncResult.isFailure(result) ? "error" : "ready"
+	if (AsyncResult.isFailure(result) && load === null) return "error"
+	return "ready"
 })
 
 const displayedPullRequestsAtom = Atom.make((get) => {
@@ -433,6 +446,11 @@ const pullRequestDetailsAtom = Atom.family((key: string) => {
 	const { repository, number } = parsePullRequestDetailAtomKey(key)
 	return githubRuntime.atom(GitHubService.use((github) => github.getPullRequestDetails(repository, number)))
 })
+const readCachedPullRequestAtom = githubRuntime.fn<PullRequestCacheKey>()((key) => CacheService.use((cache) => cache.readPullRequest(key)))
+const writeCachedPullRequestAtom = githubRuntime.fn<PullRequestItem>()((pullRequest) => CacheService.use((cache) => cache.upsertPullRequest(pullRequest)))
+const writeQueueCacheAtom = githubRuntime.fn<{ readonly viewer: string; readonly load: PullRequestLoad }>()(({ viewer, load }) =>
+	CacheService.use((cache) => cache.writeQueue(viewer, load)),
+)
 const addPullRequestLabelAtom = githubRuntime.fn<{ readonly repository: string; readonly number: number; readonly label: string }>()((input) =>
 	GitHubService.use((github) => github.addPullRequestLabel(input.repository, input.number, input.label)),
 )
@@ -724,7 +742,6 @@ export const App = () => {
 	const setThemeModal = makeModalSetter("Theme")
 	const setCommandPalette = makeModalSetter("CommandPalette")
 	const setOpenRepositoryModal = makeModalSetter("OpenRepository")
-	setActiveTheme(themeId)
 	const themeIdRef = useRef(themeId)
 	const themeModalRef = useRef(themeModal)
 	themeIdRef.current = themeId
@@ -741,7 +758,6 @@ export const App = () => {
 	const [terminalFocused, setTerminalFocused] = useState(true)
 	const [startupLoadComplete, setStartupLoadComplete] = useState(false)
 	const [loadingMoreKey, setLoadingMoreKey] = useState<string | null>(null)
-	const [detailPreviewScrollTop, setDetailPreviewScrollTop] = useState(0)
 	const usernameResult = useAtomValue(usernameAtom)
 	const loadRepoLabels = useAtomSet(listRepoLabelsAtom, { mode: "promise" })
 	const loadPullRequestPage = useAtomSet(listOpenPullRequestPageAtom, { mode: "promise" })
@@ -750,6 +766,9 @@ export const App = () => {
 	const toggleDraftStatus = useAtomSet(toggleDraftAtom, { mode: "promise" })
 	const listPullRequestReviewComments = useAtomSet(listPullRequestReviewCommentsAtom, { mode: "promise" })
 	const listPullRequestComments = useAtomSet(listPullRequestCommentsAtom, { mode: "promise" })
+	const readCachedPullRequest = useAtomSet(readCachedPullRequestAtom, { mode: "promise" })
+	const writeCachedPullRequest = useAtomSet(writeCachedPullRequestAtom, { mode: "promise" })
+	const writeQueueCache = useAtomSet(writeQueueCacheAtom, { mode: "promise" })
 	const getPullRequestMergeInfo = useAtomSet(getPullRequestMergeInfoAtom, { mode: "promise" })
 	const getRepositoryMergeMethods = useAtomSet(getRepositoryMergeMethodsAtom, { mode: "promise" })
 	const mergePullRequest = useAtomSet(mergePullRequestAtom, { mode: "promise" })
@@ -788,7 +807,7 @@ export const App = () => {
 	const maybeRefreshPullRequestsRef = useRef<(minimumAgeMs: number) => void>(() => {})
 	const detailScrollRef = useRef<ScrollBoxRenderable | null>(null)
 	const detailPreviewScrollRef = useRef<ScrollBoxRenderable | null>(null)
-	const detailPreviewScrollTopRef = useRef(0)
+	const cachedDetailKeysRef = useRef(new Set<string>())
 	const diffScrollRef = useRef<ScrollBoxRenderable | null>(null)
 	const prListScrollRef = useRef<ScrollBoxRenderable | null>(null)
 	const diffRenderableRefs = useRef(new Map<number, DiffRenderable>())
@@ -807,6 +826,7 @@ export const App = () => {
 	}
 
 	useEffect(() => {
+		setActiveTheme(themeId)
 		renderer.setBackgroundColor(colors.background)
 	}, [renderer, themeId])
 
@@ -836,7 +856,6 @@ export const App = () => {
 	pullRequestStatusRef.current = pullRequestStatus
 
 	const visibleFilterText = filterMode ? filterDraft : filterQuery
-
 	const visibleGroups = useAtomValue(visibleGroupsAtom)
 	const visiblePullRequests = useAtomValue(visiblePullRequestsAtom)
 	const selectedPullRequest = useAtomValue(selectedPullRequestAtom)
@@ -1029,20 +1048,24 @@ export const App = () => {
 		})
 			.then((page) => {
 				if (generation !== refreshGenerationRef.current) return
+				const currentLoad = registry.get(queueLoadCacheAtom)[cacheKey]
+				if (!currentLoad) return
+				const data = appendPullRequestPage(currentLoad.data, page.items)
+				const persistedLoad: PullRequestLoad = {
+					...currentLoad,
+					data,
+					endCursor: page.endCursor,
+					hasNextPage: page.hasNextPage && data.length < config.prFetchLimit,
+				}
 				setQueueLoadCache((current) => {
-					const load = current[cacheKey]
-					if (!load) return current
-					const data = appendPullRequestPage(load.data, page.items)
+					if (!current[cacheKey]) return current
 					return {
 						...current,
-						[cacheKey]: {
-							...load,
-							data,
-							endCursor: page.endCursor,
-							hasNextPage: page.hasNextPage && data.length < config.prFetchLimit,
-						},
+						[cacheKey]: persistedLoad,
 					}
 				})
+				const viewer = cacheViewerFor(activeView, username)
+				if (viewer) void writeQueueCache({ viewer, load: persistedLoad }).catch(() => {})
 			})
 			.catch((error) => {
 				flashNotice(errorMessage(error))
@@ -1069,8 +1092,10 @@ export const App = () => {
 		})
 	}
 	const hydratePullRequestDetails = (pullRequest: PullRequestItem, notifyError: boolean) => {
-		if (pullRequest.state !== "open" || pullRequest.detailLoaded) return false
+		if (pullRequest.state !== "open") return false
 		const detailKey = pullRequestDetailKey(pullRequest)
+		const forceRefresh = notifyError && pullRequest.detailLoaded && cachedDetailKeysRef.current.has(detailKey)
+		if (pullRequest.detailLoaded && !forceRefresh) return false
 		const existing = detailHydrationRef.current.get(detailKey)
 		if (existing) {
 			if (notifyError) existing.notifyError = true
@@ -1080,10 +1105,25 @@ export const App = () => {
 		const entry: DetailHydration = { token: Symbol(detailKey), notifyError }
 		detailHydrationRef.current.set(detailKey, entry)
 		const generation = refreshGenerationRef.current
+		if (!pullRequest.detailLoaded) {
+			void readCachedPullRequest({ repository: pullRequest.repository, number: pullRequest.number })
+				.then((cached) => {
+					if (!cached || !cached.detailLoaded || cached.headRefOid !== pullRequest.headRefOid) return
+					if (generation !== refreshGenerationRef.current || detailHydrationRef.current.get(detailKey) !== entry) return
+					cachedDetailKeysRef.current.add(detailKey)
+					applyPullRequestDetail(cached)
+				})
+				.catch(() => {})
+		}
 		const atom = pullRequestDetailsAtom(pullRequestDetailAtomKey(pullRequest))
+		if (forceRefresh) registry.refresh(atom)
 		void Effect.runPromise(AtomRegistry.getResult(registry, atom, { suspendOnWaiting: true }))
 			.then((detail) => {
-				if (generation === refreshGenerationRef.current && detailHydrationRef.current.get(detailKey) === entry) applyPullRequestDetail(detail)
+				if (generation === refreshGenerationRef.current && detailHydrationRef.current.get(detailKey) === entry) {
+					cachedDetailKeysRef.current.delete(detailKey)
+					applyPullRequestDetail(detail)
+					void writeCachedPullRequest(detail).catch(() => {})
+				}
 			})
 			.catch((error) => {
 				if (entry.notifyError && generation === refreshGenerationRef.current && detailHydrationRef.current.get(detailKey) === entry) flashNotice(errorMessage(error))
@@ -1147,12 +1187,12 @@ export const App = () => {
 			flashNotice(`✓ ${refreshCompletionMessage}`)
 			setRefreshCompletionMessage(null)
 			setRefreshStartedAt(null)
-		} else if (pullRequestStatus === "error") {
-			flashNotice("Refresh failed")
+		} else if (pullRequestStatus === "error" || pullRequestError) {
+			flashNotice(pullRequestLoad ? "Refresh failed; showing cached data" : "Refresh failed")
 			setRefreshCompletionMessage(null)
 			setRefreshStartedAt(null)
 		}
-	}, [refreshCompletionMessage, refreshStartedAt, pullRequestStatus, pullRequestLoad?.fetchedAt, pullRequests])
+	}, [refreshCompletionMessage, refreshStartedAt, pullRequestStatus, pullRequestError, pullRequestLoad?.fetchedAt, pullRequests])
 
 	useEffect(() => {
 		const handleFocus = () => {
@@ -1234,10 +1274,6 @@ export const App = () => {
 		setDiffPreferredSide(null)
 		setDiffCommentRangeStartIndex(null)
 		detailPreviewScrollRef.current?.scrollTo({ x: 0, y: 0 })
-		if (detailPreviewScrollTopRef.current !== 0) {
-			detailPreviewScrollTopRef.current = 0
-			setDetailPreviewScrollTop(0)
-		}
 	}, [selectedIndex])
 
 	useEffect(() => {
@@ -1574,22 +1610,11 @@ export const App = () => {
 		setDiffFileIndex((current) => (current === nextIndex ? current : nextIndex))
 	}
 
-	const syncDetailPreviewScrollState = useCallback(() => {
-		const scrollTop = detailPreviewScrollRef.current?.scrollTop
-		if (scrollTop === undefined) return
-		const nextTop = Math.max(0, Math.floor(scrollTop))
-		if (detailPreviewScrollTopRef.current === nextTop) return
-		detailPreviewScrollTopRef.current = nextTop
-		setDetailPreviewScrollTop(nextTop)
-	}, [])
-
 	const scrollDetailPreviewBy = (y: number) => {
 		detailPreviewScrollRef.current?.scrollBy({ x: 0, y })
-		syncDetailPreviewScrollState()
 	}
 	const scrollDetailPreviewTo = (y: number) => {
 		detailPreviewScrollRef.current?.scrollTo({ x: 0, y })
-		syncDetailPreviewScrollState()
 	}
 
 	const ensureDiffLineVisible = (line: number) => {
@@ -1608,20 +1633,6 @@ export const App = () => {
 		const interval = globalThis.setInterval(syncDiffScrollState, 80)
 		return () => globalThis.clearInterval(interval)
 	}, [diffFullView, stackedDiffFiles])
-
-	useLayoutEffect(() => {
-		if (!isWideLayout || detailFullView || diffFullView) return
-		const scroll = detailPreviewScrollRef.current
-		if (!scroll) return
-		const sync = () => {
-			syncDetailPreviewScrollState()
-		}
-		scroll.verticalScrollBar.on("change", sync)
-		syncDetailPreviewScrollState()
-		return () => {
-			scroll.verticalScrollBar.off("change", sync)
-		}
-	}, [isWideLayout, detailFullView, diffFullView, syncDetailPreviewScrollState])
 
 	const selectDiffFile = (index: number) => {
 		if (readyDiffFiles.length === 0) return
@@ -2158,6 +2169,8 @@ export const App = () => {
 	const closeThemeModal = (confirm: boolean) => {
 		const selectedTheme = themeDefinitions.find((theme) => theme.id === themeIdRef.current)
 		if (!confirm) {
+			setActiveTheme(themeModal.initialThemeId)
+			themeIdRef.current = themeModal.initialThemeId
 			setThemeId(themeModal.initialThemeId)
 		} else if (selectedTheme) {
 			void Effect.runPromise(saveStoredThemeId(selectedTheme.id)).catch((error) => flashNotice(errorMessage(error)))
@@ -2168,6 +2181,7 @@ export const App = () => {
 
 	const previewTheme = (id: ThemeId) => {
 		if (id === themeIdRef.current) return
+		setActiveTheme(id)
 		themeIdRef.current = id
 		setThemeId(id)
 	}
@@ -3046,13 +3060,13 @@ export const App = () => {
 
 	const fullscreenContentWidth = Math.max(24, contentWidth - 2)
 	const fullscreenBodyLines = Math.max(8, terminalHeight - 8)
-	const fullscreenDetailHeaderHeight = getDetailHeaderHeight(selectedPullRequest, contentWidth, isWideLayout)
+	const fullscreenDetailHeaderHeight = getDetailHeaderHeight(selectedPullRequest, contentWidth, isWideLayout, selectedComments, selectedCommentsStatus)
 	const fullscreenDetailBodyViewportHeight = Math.max(1, wideBodyHeight - fullscreenDetailHeaderHeight)
-	const fullscreenDetailBodyHeight = getScrollableDetailBodyHeight(selectedPullRequest, fullscreenContentWidth, selectedComments, selectedCommentsStatus)
+	const fullscreenDetailBodyHeight = getScrollableDetailBodyHeight(selectedPullRequest, fullscreenContentWidth)
 	const fullscreenDetailBodyScrollable = fullscreenDetailBodyHeight > fullscreenDetailBodyViewportHeight
-	const wideDetailHeaderHeight = getDetailHeaderHeight(selectedPullRequest, rightPaneWidth, true)
+	const wideDetailHeaderHeight = getDetailHeaderHeight(selectedPullRequest, rightPaneWidth, true, selectedComments, selectedCommentsStatus)
 	const wideDetailBodyViewportHeight = Math.max(1, wideBodyHeight - wideDetailHeaderHeight)
-	const wideDetailBodyHeight = getScrollableDetailBodyHeight(selectedPullRequest, rightContentWidth, selectedComments, selectedCommentsStatus)
+	const wideDetailBodyHeight = getScrollableDetailBodyHeight(selectedPullRequest, rightContentWidth)
 	const wideDetailBodyScrollable = wideDetailBodyHeight > wideDetailBodyViewportHeight
 	const narrowDetailsPaneHeight = getDetailsPaneHeight({
 		pullRequest: selectedPullRequest,
@@ -3070,11 +3084,8 @@ export const App = () => {
 				pullRequest: selectedPullRequest,
 				paneWidth: rightPaneWidth,
 				showChecks: true,
-				contentWidth: rightContentWidth,
 				comments: selectedComments,
 				commentsStatus: selectedCommentsStatus,
-				bodyScrollTop: detailPreviewScrollTop,
-				bodyViewportHeight: wideDetailBodyViewportHeight,
 			})
 
 	const prListProps = {
@@ -3214,22 +3225,36 @@ export const App = () => {
 				/>
 			) : detailFullView && isSelectedPullRequestDetailLoading && selectedPullRequest ? (
 				<box flexGrow={1} flexDirection="column">
-					<DetailHeader pullRequest={selectedPullRequest} viewerUsername={username} contentWidth={fullscreenContentWidth} paneWidth={contentWidth} showChecks={isWideLayout} />
-					<Filler rows={Math.max(1, wideBodyHeight - getDetailHeaderHeight(selectedPullRequest, contentWidth, isWideLayout))} prefix="detail-loading-full" />
+					<DetailHeader
+						pullRequest={selectedPullRequest}
+						viewerUsername={username}
+						contentWidth={fullscreenContentWidth}
+						paneWidth={contentWidth}
+						showChecks={isWideLayout}
+						comments={selectedComments}
+						commentsStatus={selectedCommentsStatus}
+					/>
+					<Filler rows={Math.max(1, wideBodyHeight - fullscreenDetailHeaderHeight)} prefix="detail-loading-full" />
 				</box>
 			) : isWideLayout && detailFullView ? (
 				<box flexGrow={1} flexDirection="column">
 					{selectedPullRequest ? (
 						<>
-							<DetailHeader pullRequest={selectedPullRequest} viewerUsername={username} contentWidth={fullscreenContentWidth} paneWidth={contentWidth} showChecks />
+							<DetailHeader
+								pullRequest={selectedPullRequest}
+								viewerUsername={username}
+								contentWidth={fullscreenContentWidth}
+								paneWidth={contentWidth}
+								showChecks
+								comments={selectedComments}
+								commentsStatus={selectedCommentsStatus}
+							/>
 							<scrollbox ref={detailScrollRef} focusable={false} flexGrow={1} verticalScrollbarOptions={{ visible: fullscreenDetailBodyScrollable }}>
 								<DetailBody
 									pullRequest={selectedPullRequest}
 									contentWidth={fullscreenContentWidth}
 									bodyLines={fullscreenBodyLines}
 									bodyLineLimit={DETAIL_BODY_SCROLL_LIMIT}
-									comments={selectedComments}
-									commentsStatus={selectedCommentsStatus}
 									loadingIndicator={loadingIndicator}
 									themeId={themeId}
 									onLinkOpen={openLinkInBrowser}
@@ -3266,20 +3291,34 @@ export const App = () => {
 					<box width={rightPaneWidth} height={wideBodyHeight} flexDirection="column">
 						{isSelectedPullRequestDetailLoading && selectedPullRequest ? (
 							<>
-								<DetailHeader pullRequest={selectedPullRequest} viewerUsername={username} contentWidth={rightContentWidth} paneWidth={rightPaneWidth} showChecks />
-								<Filler rows={Math.max(1, wideBodyHeight - getDetailHeaderHeight(selectedPullRequest, rightPaneWidth, true))} prefix="detail-loading-preview" />
+								<DetailHeader
+									pullRequest={selectedPullRequest}
+									viewerUsername={username}
+									contentWidth={rightContentWidth}
+									paneWidth={rightPaneWidth}
+									showChecks
+									comments={selectedComments}
+									commentsStatus={selectedCommentsStatus}
+								/>
+								<Filler rows={Math.max(1, wideBodyHeight - wideDetailHeaderHeight)} prefix="detail-loading-preview" />
 							</>
 						) : selectedPullRequest ? (
 							<>
-								<DetailHeader pullRequest={selectedPullRequest} viewerUsername={username} contentWidth={rightContentWidth} paneWidth={rightPaneWidth} showChecks />
+								<DetailHeader
+									pullRequest={selectedPullRequest}
+									viewerUsername={username}
+									contentWidth={rightContentWidth}
+									paneWidth={rightPaneWidth}
+									showChecks
+									comments={selectedComments}
+									commentsStatus={selectedCommentsStatus}
+								/>
 								<scrollbox ref={detailPreviewScrollRef} flexGrow={1} verticalScrollbarOptions={{ visible: wideDetailBodyScrollable }}>
 									<DetailBody
 										pullRequest={selectedPullRequest}
 										contentWidth={rightContentWidth}
 										bodyLines={wideDetailLines}
 										bodyLineLimit={DETAIL_BODY_SCROLL_LIMIT}
-										comments={selectedComments}
-										commentsStatus={selectedCommentsStatus}
 										loadingIndicator={loadingIndicator}
 										themeId={themeId}
 										onLinkOpen={openLinkInBrowser}
@@ -3295,15 +3334,20 @@ export const App = () => {
 				<box flexGrow={1} flexDirection="column">
 					{selectedPullRequest ? (
 						<>
-							<DetailHeader pullRequest={selectedPullRequest} viewerUsername={username} contentWidth={fullscreenContentWidth} paneWidth={contentWidth} />
+							<DetailHeader
+								pullRequest={selectedPullRequest}
+								viewerUsername={username}
+								contentWidth={fullscreenContentWidth}
+								paneWidth={contentWidth}
+								comments={selectedComments}
+								commentsStatus={selectedCommentsStatus}
+							/>
 							<scrollbox ref={detailScrollRef} focusable={false} flexGrow={1} verticalScrollbarOptions={{ visible: fullscreenDetailBodyScrollable }}>
 								<DetailBody
 									pullRequest={selectedPullRequest}
 									contentWidth={fullscreenContentWidth}
 									bodyLines={fullscreenBodyLines}
 									bodyLineLimit={DETAIL_BODY_SCROLL_LIMIT}
-									comments={selectedComments}
-									commentsStatus={selectedCommentsStatus}
 									loadingIndicator={loadingIndicator}
 									themeId={themeId}
 									onLinkOpen={openLinkInBrowser}

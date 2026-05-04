@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import type { PullRequestComment, PullRequestItem } from "../src/domain.ts"
-import { getDetailJunctionRows, getScrollableDetailBodyHeight, truncateConversationPath } from "../src/ui/DetailsPane.tsx"
+import { bodyPreview, getDetailHeaderHeight, getDetailJunctionRows, getScrollableDetailBodyHeight, truncateConversationPath } from "../src/ui/DetailsPane.tsx"
 
 const pullRequest = (body: string): PullRequestItem => ({
 	repository: "owner/repo",
@@ -41,6 +41,28 @@ describe("truncateConversationPath", () => {
 	})
 })
 
+describe("bodyPreview markdown tables", () => {
+	const lineText = (line: ReturnType<typeof bodyPreview>[number]) => line.segments.map((segment) => segment.text).join("")
+
+	test("renders pipe tables without raw markdown separator rows", () => {
+		const rows = bodyPreview("| Consumer | Sketch accommodation |\n|---|---|\n| `Session.Service.get` | **typed errors** |", 80, 10)
+		const text = rows.map(lineText)
+
+		expect(text[0]).toContain("Consumer")
+		expect(text[0]).toContain("Sketch accommodation")
+		expect(text[1]).toContain("─┼─")
+		expect(text).not.toContain("|---|---|")
+		expect(text.join("\n")).toContain("Session.Service.get")
+		expect(text.join("\n")).not.toContain("`Session.Service.get`")
+		expect(text.join("\n")).not.toContain("**typed errors**")
+	})
+
+	test("only parses tables with a separator row", () => {
+		const rows = bodyPreview("A | B\nnot a table", 40, 10)
+		expect(rows.map(lineText)).toEqual(["A | B", "not a table"])
+	})
+})
+
 const comments: readonly PullRequestComment[] = [
 	{
 		_tag: "comment",
@@ -53,72 +75,30 @@ const comments: readonly PullRequestComment[] = [
 ]
 
 describe("detail pane junction rows", () => {
-	test("keeps the comments connector aligned with the scrolled body divider", () => {
+	test("emits a header-level comments summary divider when comments are ready", () => {
 		const pr = pullRequest("Line A\nLine B\nLine C")
 		const headerDividerRow = 3
-		const conversationDividerAtTop = 7
-		const conversationDividerAfterScroll = 5
+		const commentsSummaryDivider = 5
 
-		expect(
-			getDetailJunctionRows({
-				pullRequest: pr,
-				paneWidth: 60,
-				contentWidth: 58,
-				comments: comments,
-				commentsStatus: "ready",
-				bodyScrollTop: 0,
-				bodyViewportHeight: 10,
-			}),
-		).toEqual([headerDividerRow, conversationDividerAtTop])
-		expect(
-			getDetailJunctionRows({
-				pullRequest: pr,
-				paneWidth: 60,
-				contentWidth: 58,
-				comments: comments,
-				commentsStatus: "ready",
-				bodyScrollTop: 2,
-				bodyViewportHeight: 10,
-			}),
-		).toEqual([headerDividerRow, conversationDividerAfterScroll])
-	})
-
-	test("hides the comments connector when the divider is outside the body viewport", () => {
-		const pr = pullRequest("Line A\nLine B\nLine C")
-		const headerDividerRow = 3
-
-		expect(
-			getDetailJunctionRows({
-				pullRequest: pr,
-				paneWidth: 60,
-				contentWidth: 58,
-				comments: comments,
-				commentsStatus: "ready",
-				bodyScrollTop: 4,
-				bodyViewportHeight: 10,
-			}),
-		).toEqual([headerDividerRow])
-		expect(
-			getDetailJunctionRows({
-				pullRequest: pr,
-				paneWidth: 60,
-				contentWidth: 58,
-				comments: comments,
-				commentsStatus: "ready",
-				bodyScrollTop: 0,
-				bodyViewportHeight: 2,
-			}),
-		).toEqual([headerDividerRow])
+		expect(getDetailJunctionRows({ pullRequest: pr, paneWidth: 60, comments, commentsStatus: "ready" })).toEqual([headerDividerRow, commentsSummaryDivider])
 	})
 
 	test("does not reserve comments space while loading or empty", () => {
 		const pr = pullRequest("Line A\nLine B")
-		const baseJunctionRows = getDetailJunctionRows({ pullRequest: pr, paneWidth: 60, contentWidth: 58 })
+		const baseJunctionRows = getDetailJunctionRows({ pullRequest: pr, paneWidth: 60 })
 		const baseBodyHeight = getScrollableDetailBodyHeight(pr, 58)
 
-		expect(getDetailJunctionRows({ pullRequest: pr, paneWidth: 60, contentWidth: 58, comments: [], commentsStatus: "loading" })).toEqual(baseJunctionRows)
-		expect(getDetailJunctionRows({ pullRequest: pr, paneWidth: 60, contentWidth: 58, comments: [], commentsStatus: "ready" })).toEqual(baseJunctionRows)
-		expect(getScrollableDetailBodyHeight(pr, 58, [], "loading")).toBe(baseBodyHeight)
-		expect(getScrollableDetailBodyHeight(pr, 58, [], "ready")).toBe(baseBodyHeight)
+		expect(getDetailJunctionRows({ pullRequest: pr, paneWidth: 60, comments: [], commentsStatus: "loading" })).toEqual(baseJunctionRows)
+		expect(getDetailJunctionRows({ pullRequest: pr, paneWidth: 60, comments: [], commentsStatus: "ready" })).toEqual(baseJunctionRows)
+		expect(getScrollableDetailBodyHeight(pr, 58)).toBe(baseBodyHeight)
+	})
+
+	test("comment summaries add header height without growing body height", () => {
+		const pr = pullRequest("Line A\nLine B")
+		const baseHeaderHeight = getDetailHeaderHeight(pr, 60, true)
+		const baseBodyHeight = getScrollableDetailBodyHeight(pr, 58)
+
+		expect(getDetailHeaderHeight(pr, 60, true, comments, "ready")).toBe(baseHeaderHeight + 2)
+		expect(getScrollableDetailBodyHeight(pr, 58)).toBe(baseBodyHeight)
 	})
 })
