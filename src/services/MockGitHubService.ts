@@ -74,6 +74,7 @@ const buildPullRequest = (index: number, options: Required<MockOptions>): PullRe
 		createdAt,
 		closedAt: null,
 		url: `https://github.com/${repository}/pull/${number}`,
+		assignees: [{ login: options.username, name: "Mock User" }],
 	}
 }
 

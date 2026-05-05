@@ -18,12 +18,14 @@ export type PullRequestListRow =
 
 const GROUP_ICON = "◆"
 
+const ASSIGNEE_WIDTH = 3
+
 const getRowLayout = (contentWidth: number, numberWidth: number, ageWidth: number) => {
 	const reviewWidth = 1
 	const checkWidth = 6
-	const fixedWidth = reviewWidth + 1 + numberWidth + 1 + checkWidth + ageWidth
+	const fixedWidth = reviewWidth + 1 + numberWidth + 1 + checkWidth + ageWidth + 1 + ASSIGNEE_WIDTH
 	const titleWidth = Math.max(8, contentWidth - fixedWidth)
-	return { reviewWidth, checkWidth, ageWidth, numberWidth, titleWidth }
+	return { reviewWidth, checkWidth, ageWidth, numberWidth, titleWidth, assigneeWidth: ASSIGNEE_WIDTH }
 }
 
 const groupNumberWidth = (pullRequests: readonly PullRequestItem[]) => {
@@ -93,6 +95,19 @@ export const pullRequestListRowIndex = (rows: readonly PullRequestListRow[], url
 	return index >= 0 ? index : null
 }
 
+const assigneeLabel = (pullRequest: PullRequestItem): string => {
+	const first = pullRequest.assignees[0]
+	if (!first) return ""
+	if (first.name) {
+		return first.name
+			.split(/\s+/)
+			.map((part) => part[0]?.toUpperCase())
+			.filter(Boolean)
+			.join("")
+	}
+	return first.login
+}
+
 const PullRequestRow = ({
 	pullRequest,
 	selected,
@@ -115,8 +130,8 @@ const PullRequestRow = ({
 	onHoverChange: (hovered: boolean) => void
 }) => {
 	const ageText = `${daysOpen(pullRequest.createdAt)}d`
-	const { reviewWidth, checkWidth, ageWidth, numberWidth, titleWidth } = getRowLayout(contentWidth, numWidth, ageColWidth)
-	const rowWidth = reviewWidth + 1 + numberWidth + 1 + titleWidth + checkWidth + ageWidth
+	const { reviewWidth, checkWidth, ageWidth, numberWidth, titleWidth, assigneeWidth } = getRowLayout(contentWidth, numWidth, ageColWidth)
+	const rowWidth = reviewWidth + 1 + numberWidth + 1 + titleWidth + checkWidth + ageWidth + 1 + assigneeWidth
 	const fillerWidth = Math.max(0, contentWidth - rowWidth)
 	const display = pullRequestRowDisplay(pullRequest, selected)
 	const rowBg = selected ? colors.selectedBg : hovered ? rowHoverBackground() : undefined
@@ -134,6 +149,8 @@ const PullRequestRow = ({
 			</span>
 			<span fg={display.checkFg}>{fitCell(display.checkText, checkWidth, "right")}</span>
 			<span fg={colors.muted}>{fitCell(ageText, ageWidth, "right")}</span>
+			<span> </span>
+			<span fg={colors.muted}>{fitCell(assigneeLabel(pullRequest), assigneeWidth)}</span>
 			{fillerWidth > 0 ? <span>{" ".repeat(fillerWidth)}</span> : null}
 		</TextLine>
 	)

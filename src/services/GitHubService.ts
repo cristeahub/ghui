@@ -41,6 +41,7 @@ const RawCheckContextSchema = Schema.Union([
 
 const RawAuthorSchema = Schema.Struct({ login: Schema.String })
 const RawRepositorySchema = Schema.Struct({ nameWithOwner: Schema.String })
+const RawAssigneeSchema = Schema.Struct({ login: Schema.String, name: NullableString })
 const RawLabelSchema = Schema.Struct({
 	name: Schema.String,
 	color: OptionalNullableString,
@@ -64,6 +65,7 @@ const RawPullRequestSummaryFields = {
 	author: RawAuthorSchema,
 	headRefOid: Schema.String,
 	repository: RawRepositorySchema,
+	assignees: Schema.Struct({ nodes: Schema.Array(RawAssigneeSchema) }),
 } as const
 
 const RawPullRequestSummaryNodeSchema = Schema.Struct({
@@ -235,7 +237,8 @@ const SUMMARY_FIELDS_FRAGMENT = `
         url
         author { login }
         headRefOid
-        repository { nameWithOwner }${STATUS_CHECK_FRAGMENT}`
+        repository { nameWithOwner }
+        assignees(first: 10) { nodes { login name } }${STATUS_CHECK_FRAGMENT}`
 
 const DETAIL_FIELDS_FRAGMENT = `
         number
@@ -255,6 +258,7 @@ const DETAIL_FIELDS_FRAGMENT = `
         author { login }
         headRefOid
         repository { nameWithOwner }
+        assignees(first: 10) { nodes { login name } }
         labels(first: 20) { nodes { name color } }${STATUS_CHECK_FRAGMENT}`
 
 const pullRequestSearchQuery = `
@@ -425,6 +429,7 @@ const parsePullRequestSummary = (item: RawPullRequestSummaryNode): PullRequestIt
 		createdAt: new Date(item.createdAt),
 		closedAt: normalizeDate(item.closedAt),
 		url: item.url,
+		assignees: item.assignees.nodes.map((a) => ({ login: a.login, name: a.name })),
 	}
 }
 

@@ -37,6 +37,8 @@ const CachedCheckItemSchema = Schema.Struct({
 	conclusion: Schema.NullOr(CheckConclusionSchema),
 })
 
+const CachedAssigneeSchema = Schema.Struct({ login: Schema.String, name: Schema.NullOr(Schema.String) })
+
 const CachedPullRequestItemSchema = Schema.Struct({
 	repository: Schema.String,
 	author: Schema.String,
@@ -58,6 +60,7 @@ const CachedPullRequestItemSchema = Schema.Struct({
 	createdAt: Schema.String,
 	closedAt: Schema.NullOr(Schema.String),
 	url: Schema.String,
+	assignees: Schema.optionalKey(Schema.Array(CachedAssigneeSchema)),
 })
 
 const CachedPullRequestViewSchema = Schema.Union([
@@ -124,6 +127,7 @@ const cachedPullRequestToDomain = (cached: CachedPullRequestItem): PullRequestIt
 		createdAt,
 		closedAt,
 		url: cached.url,
+		assignees: cached.assignees ?? [],
 	}
 }
 
@@ -148,6 +152,7 @@ const encodePullRequest = (pullRequest: PullRequestItem): CachedPullRequestItem 
 	createdAt: pullRequest.createdAt.toISOString(),
 	closedAt: pullRequest.closedAt?.toISOString() ?? null,
 	url: pullRequest.url,
+	assignees: pullRequest.assignees,
 })
 
 const decodePullRequestJson = (json: string): Effect.Effect<PullRequestItem, CacheError> =>
