@@ -342,6 +342,7 @@ const filterQueryAtom = Atom.make(initialFilter)
 const filterDraftAtom = Atom.make("")
 const filterModeAtom = Atom.make(false)
 const hideDraftsAtom = Atom.make(false)
+const hideAssignedAtom = Atom.make(false)
 const detailFullViewAtom = Atom.make(false)
 const detailScrollOffsetAtom = Atom.make(0)
 const diffFullViewAtom = Atom.make(false)
@@ -414,8 +415,11 @@ const effectiveFilterQueryAtom = Atom.make((get) => (get(filterModeAtom) ? get(f
 const filteredPullRequestsAtom = Atom.make((get) => {
 	const pullRequests = get(displayedPullRequestsAtom)
 	const hideDrafts = get(hideDraftsAtom)
+	const hideAssigned = get(hideAssignedAtom)
+	const viewerUsername = hideAssigned ? get(usernameAtom).pipe(AsyncResult.getOrElse(() => null)) : null
 	const query = get(effectiveFilterQueryAtom)
-	const source = hideDrafts ? pullRequests.filter((pr) => pr.reviewStatus !== "draft") : pullRequests
+	let source = hideDrafts ? pullRequests.filter((pr) => pr.reviewStatus !== "draft") : pullRequests
+	if (viewerUsername) source = source.filter((pr) => !pr.assignees.some((a) => a.login === viewerUsername))
 	if (query.length === 0) return source
 	return source
 		.flatMap((pullRequest) => {
@@ -713,6 +717,7 @@ export const App = ({ systemThemeGeneration = 0 }: AppProps) => {
 	const [filterDraft, setFilterDraft] = useAtom(filterDraftAtom)
 	const [filterMode, setFilterMode] = useAtom(filterModeAtom)
 	const [hideDrafts, setHideDrafts] = useAtom(hideDraftsAtom)
+	const [hideAssigned, setHideAssigned] = useAtom(hideAssignedAtom)
 	const [detailFullView, setDetailFullView] = useAtom(detailFullViewAtom)
 	const setDetailScrollOffset = useAtomSet(detailScrollOffsetAtom)
 	const [diffFullView, setDiffFullView] = useAtom(diffFullViewAtom)
@@ -2811,6 +2816,7 @@ export const App = ({ systemThemeGeneration = 0 }: AppProps) => {
 		filterQuery,
 		filterMode,
 		hideDrafts,
+		hideAssigned,
 		selectedRepository,
 		activeViews,
 		activeView,
@@ -2894,6 +2900,12 @@ export const App = ({ systemThemeGeneration = 0 }: AppProps) => {
 			toggleHideDrafts: () => {
 				setHideDrafts((current) => {
 					flashNotice(!current ? "Hiding draft pull requests" : "Showing draft pull requests")
+					return !current
+				})
+			},
+			toggleHideAssigned: () => {
+				setHideAssigned((current) => {
+					flashNotice(!current ? "Hiding assigned pull requests" : "Showing assigned pull requests")
 					return !current
 				})
 			},
@@ -3721,6 +3733,7 @@ export const App = ({ systemThemeGeneration = 0 }: AppProps) => {
 						filterEditing={filterMode}
 						showFilterClear={filterMode || filterQuery.length > 0}
 						hideDrafts={hideDrafts}
+						hideAssigned={hideAssigned}
 						detailFullView={detailFullView}
 						diffFullView={diffFullView}
 						diffRangeActive={diffCommentRangeActive}

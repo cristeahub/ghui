@@ -41,6 +41,7 @@ interface AppCommandActions {
 	readonly openPullRequestInBrowser: () => void
 	readonly copyPullRequestMetadata: () => void
 	readonly toggleHideDrafts: () => void
+	readonly toggleHideAssigned: () => void
 	readonly quit: () => void
 }
 
@@ -49,6 +50,7 @@ interface BuildAppCommandsInput {
 	readonly filterQuery: string
 	readonly filterMode: boolean
 	readonly hideDrafts: boolean
+	readonly hideAssigned: boolean
 	readonly selectedRepository: string | null
 	readonly activeViews: readonly PullRequestView[]
 	readonly activeView: PullRequestView
@@ -79,6 +81,7 @@ export const buildAppCommands = ({
 	filterQuery,
 	filterMode,
 	hideDrafts,
+	hideAssigned,
 	selectedRepository,
 	activeViews,
 	activeView,
@@ -169,6 +172,15 @@ export const buildAppCommands = ({
 			shortcut: "shift-d",
 			keywords: ["draft", "filter", "hide", "show"],
 			run: actions.toggleHideDrafts,
+		}),
+		defineCommand({
+			id: "filter.hide-assigned",
+			title: hideAssigned ? "Show assigned pull requests" : "Hide assigned pull requests",
+			scope: "Global",
+			subtitle: hideAssigned ? "Include PRs assigned to you" : "Exclude PRs assigned to you",
+			shortcut: "shift-a",
+			keywords: ["assigned", "assignee", "filter", "hide", "show"],
+			run: actions.toggleHideAssigned,
 		}),
 		defineCommand({
 			id: "theme.open",

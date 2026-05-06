@@ -38,6 +38,7 @@ export const listNavKeymap = List(
 	{ id: "list.toggle-draft", title: "Toggle draft", keys: ["s", "shift+s"], run: (s) => s.runCommandById("pull.toggle-draft") },
 	{ id: "list.copy", title: "Copy metadata", keys: ["y"], run: (s) => s.runCommandById("pull.copy-metadata") },
 	{ id: "list.hide-drafts", title: "Toggle hide drafts", keys: ["shift+d"], run: (s) => s.runCommandById("filter.hide-drafts") },
+	{ id: "list.hide-assigned", title: "Toggle hide assigned", keys: ["shift+a"], run: (s) => s.runCommandById("filter.hide-assigned") },
 	{ id: "list.detail.open", title: "Open details", keys: ["return"], run: (s) => s.runCommandById("detail.open") },
 
 	// Queue mode tabs
