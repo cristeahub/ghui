@@ -53,7 +53,16 @@ import { CommandRunner } from "./services/CommandRunner.js"
 import { GitHubService } from "./services/GitHubService.js"
 import { detectSystemAppearance } from "./systemAppearance.js"
 import { fixedThemeConfig, resolveThemeId, systemThemeConfigForTheme, themeConfigWithSelection, type ThemeConfig, type ThemeMode } from "./themeConfig.js"
-import { loadStoredDiffWhitespaceMode, loadStoredThemeConfig, saveStoredDiffWhitespaceMode, saveStoredThemeConfig } from "./themeStore.js"
+import {
+	loadStoredDiffWhitespaceMode,
+	loadStoredHideAssigned,
+	loadStoredHideDrafts,
+	loadStoredThemeConfig,
+	saveStoredDiffWhitespaceMode,
+	saveStoredHideAssigned,
+	saveStoredHideDrafts,
+	saveStoredThemeConfig,
+} from "./themeStore.js"
 import { colors, filterThemeDefinitions, mixHex, pairedThemeId, setActiveTheme, themeDefinitions, themeToneForThemeId, type ThemeId, type ThemeTone } from "./ui/colors.js"
 import {
 	backspace as editorBackspace,
@@ -187,10 +196,12 @@ const githubRuntime = Atom.runtime(
 		Layer.provideMerge(Observability.layer),
 	),
 )
-const [initialThemeConfig, initialDiffWhitespaceMode, initialSystemAppearance] = await Promise.all([
+const [initialThemeConfig, initialDiffWhitespaceMode, initialSystemAppearance, initialHideDrafts, initialHideAssigned] = await Promise.all([
 	Effect.runPromise(loadStoredThemeConfig),
 	Effect.runPromise(loadStoredDiffWhitespaceMode),
 	detectSystemAppearance(),
+	Effect.runPromise(loadStoredHideDrafts),
+	Effect.runPromise(loadStoredHideAssigned),
 ])
 const initialThemeId = resolveThemeId(initialThemeConfig, initialSystemAppearance)
 setActiveTheme(initialThemeId)
@@ -341,8 +352,8 @@ const initialFilter = (() => {
 const filterQueryAtom = Atom.make(initialFilter)
 const filterDraftAtom = Atom.make("")
 const filterModeAtom = Atom.make(false)
-const hideDraftsAtom = Atom.make(false)
-const hideAssignedAtom = Atom.make(false)
+const hideDraftsAtom = Atom.make(initialHideDrafts)
+const hideAssignedAtom = Atom.make(initialHideAssigned)
 const detailFullViewAtom = Atom.make(false)
 const detailScrollOffsetAtom = Atom.make(0)
 const diffFullViewAtom = Atom.make(false)
@@ -416,10 +427,9 @@ const filteredPullRequestsAtom = Atom.make((get) => {
 	const pullRequests = get(displayedPullRequestsAtom)
 	const hideDrafts = get(hideDraftsAtom)
 	const hideAssigned = get(hideAssignedAtom)
-	const viewerUsername = hideAssigned ? get(usernameAtom).pipe(AsyncResult.getOrElse(() => null)) : null
 	const query = get(effectiveFilterQueryAtom)
 	let source = hideDrafts ? pullRequests.filter((pr) => pr.reviewStatus !== "draft") : pullRequests
-	if (viewerUsername) source = source.filter((pr) => !pr.assignees.some((a) => a.login === viewerUsername))
+	if (hideAssigned) source = source.filter((pr) => pr.assignees.length === 0)
 	if (query.length === 0) return source
 	return source
 		.flatMap((pullRequest) => {
@@ -2899,14 +2909,18 @@ export const App = ({ systemThemeGeneration = 0 }: AppProps) => {
 			copyPullRequestMetadata: copySelectedPullRequestMetadata,
 			toggleHideDrafts: () => {
 				setHideDrafts((current) => {
-					flashNotice(!current ? "Hiding draft pull requests" : "Showing draft pull requests")
-					return !current
+					const next = !current
+					flashNotice(next ? "Hiding draft pull requests" : "Showing draft pull requests")
+					void Effect.runPromise(saveStoredHideDrafts(next)).catch((error) => flashNotice(errorMessage(error)))
+					return next
 				})
 			},
 			toggleHideAssigned: () => {
 				setHideAssigned((current) => {
-					flashNotice(!current ? "Hiding assigned pull requests" : "Showing assigned pull requests")
-					return !current
+					const next = !current
+					flashNotice(next ? "Hiding assigned pull requests" : "Showing assigned pull requests")
+					void Effect.runPromise(saveStoredHideAssigned(next)).catch((error) => flashNotice(errorMessage(error)))
+					return next
 				})
 			},
 			quit: () => renderer.destroy(),

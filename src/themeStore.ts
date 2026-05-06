@@ -13,6 +13,8 @@ interface StoredConfig {
 	readonly lightTheme?: unknown
 	readonly diffWhitespaceMode?: unknown
 	readonly systemThemeAutoReload?: unknown
+	readonly hideDrafts?: unknown
+	readonly hideAssigned?: unknown
 }
 
 const configDirectory = () => {
@@ -99,4 +101,36 @@ export const saveStoredDiffWhitespaceMode = (diffWhitespaceMode: DiffWhitespaceM
 		if (config.diffWhitespaceMode === diffWhitespaceMode) return
 
 		await writeStoredConfig({ ...config, diffWhitespaceMode })
+	})
+
+export const loadStoredHideDrafts: Effect.Effect<boolean> = Effect.catchCause(
+	Effect.tryPromise(async () => {
+		const config = await readStoredConfig()
+		return typeof config.hideDrafts === "boolean" ? config.hideDrafts : false
+	}),
+	() => Effect.succeed(false),
+)
+
+export const loadStoredHideAssigned: Effect.Effect<boolean> = Effect.catchCause(
+	Effect.tryPromise(async () => {
+		const config = await readStoredConfig()
+		return typeof config.hideAssigned === "boolean" ? config.hideAssigned : false
+	}),
+	() => Effect.succeed(false),
+)
+
+export const saveStoredHideDrafts = (hideDrafts: boolean): Effect.Effect<void> =>
+	Effect.tryPromise(async () => {
+		const config = await readStoredConfig()
+		if (config.hideDrafts === hideDrafts) return
+
+		await writeStoredConfig({ ...config, hideDrafts })
+	})
+
+export const saveStoredHideAssigned = (hideAssigned: boolean): Effect.Effect<void> =>
+	Effect.tryPromise(async () => {
+		const config = await readStoredConfig()
+		if (config.hideAssigned === hideAssigned) return
+
+		await writeStoredConfig({ ...config, hideAssigned })
 	})
