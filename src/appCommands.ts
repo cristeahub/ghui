@@ -40,6 +40,7 @@ interface AppCommandActions {
 	readonly openCloseModal: () => void
 	readonly openPullRequestInBrowser: () => void
 	readonly copyPullRequestMetadata: () => void
+	readonly toggleHideDrafts: () => void
 	readonly quit: () => void
 }
 
@@ -47,6 +48,7 @@ interface BuildAppCommandsInput {
 	readonly pullRequestStatus: LoadStatus
 	readonly filterQuery: string
 	readonly filterMode: boolean
+	readonly hideDrafts: boolean
 	readonly selectedRepository: string | null
 	readonly activeViews: readonly PullRequestView[]
 	readonly activeView: PullRequestView
@@ -76,6 +78,7 @@ export const buildAppCommands = ({
 	pullRequestStatus,
 	filterQuery,
 	filterMode,
+	hideDrafts,
 	selectedRepository,
 	activeViews,
 	activeView,
@@ -157,6 +160,15 @@ export const buildAppCommands = ({
 			shortcut: "esc",
 			disabledReason: filterQuery.length > 0 || filterMode ? null : "No filter is active.",
 			run: actions.clearFilter,
+		}),
+		defineCommand({
+			id: "filter.hide-drafts",
+			title: hideDrafts ? "Show draft pull requests" : "Hide draft pull requests",
+			scope: "Global",
+			subtitle: hideDrafts ? "Include drafts in the list" : "Exclude drafts from the list",
+			shortcut: "shift-d",
+			keywords: ["draft", "filter", "hide", "show"],
+			run: actions.toggleHideDrafts,
 		}),
 		defineCommand({
 			id: "theme.open",

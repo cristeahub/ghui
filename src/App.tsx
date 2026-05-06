@@ -341,6 +341,7 @@ const initialFilter = (() => {
 const filterQueryAtom = Atom.make(initialFilter)
 const filterDraftAtom = Atom.make("")
 const filterModeAtom = Atom.make(false)
+const hideDraftsAtom = Atom.make(false)
 const detailFullViewAtom = Atom.make(false)
 const detailScrollOffsetAtom = Atom.make(0)
 const diffFullViewAtom = Atom.make(false)
@@ -412,9 +413,11 @@ const effectiveFilterQueryAtom = Atom.make((get) => (get(filterModeAtom) ? get(f
 
 const filteredPullRequestsAtom = Atom.make((get) => {
 	const pullRequests = get(displayedPullRequestsAtom)
+	const hideDrafts = get(hideDraftsAtom)
 	const query = get(effectiveFilterQueryAtom)
-	if (query.length === 0) return pullRequests
-	return pullRequests
+	const source = hideDrafts ? pullRequests.filter((pr) => pr.reviewStatus !== "draft") : pullRequests
+	if (query.length === 0) return source
+	return source
 		.flatMap((pullRequest) => {
 			const score = pullRequestFilterScore(pullRequest, query)
 			return score === null ? [] : [{ pullRequest, score }]
@@ -709,6 +712,7 @@ export const App = ({ systemThemeGeneration = 0 }: AppProps) => {
 	const [filterQuery, setFilterQuery] = useAtom(filterQueryAtom)
 	const [filterDraft, setFilterDraft] = useAtom(filterDraftAtom)
 	const [filterMode, setFilterMode] = useAtom(filterModeAtom)
+	const [hideDrafts, setHideDrafts] = useAtom(hideDraftsAtom)
 	const [detailFullView, setDetailFullView] = useAtom(detailFullViewAtom)
 	const setDetailScrollOffset = useAtomSet(detailScrollOffsetAtom)
 	const [diffFullView, setDiffFullView] = useAtom(diffFullViewAtom)
@@ -2806,6 +2810,7 @@ export const App = ({ systemThemeGeneration = 0 }: AppProps) => {
 		pullRequestStatus,
 		filterQuery,
 		filterMode,
+		hideDrafts,
 		selectedRepository,
 		activeViews,
 		activeView,
@@ -2886,6 +2891,12 @@ export const App = ({ systemThemeGeneration = 0 }: AppProps) => {
 				if (selectedPullRequest) openSelectedPullRequestInBrowser(selectedPullRequest)
 			},
 			copyPullRequestMetadata: copySelectedPullRequestMetadata,
+			toggleHideDrafts: () => {
+				setHideDrafts((current) => {
+					flashNotice(!current ? "Hiding draft pull requests" : "Showing draft pull requests")
+					return !current
+				})
+			},
 			quit: () => renderer.destroy(),
 		},
 	})
@@ -3709,6 +3720,7 @@ export const App = ({ systemThemeGeneration = 0 }: AppProps) => {
 					<FooterHints
 						filterEditing={filterMode}
 						showFilterClear={filterMode || filterQuery.length > 0}
+						hideDrafts={hideDrafts}
 						detailFullView={detailFullView}
 						diffFullView={diffFullView}
 						diffRangeActive={diffCommentRangeActive}

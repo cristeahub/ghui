@@ -13,6 +13,7 @@ export const initialRetryProgress: RetryProgress = RetryProgress.Idle()
 interface HintsContext {
 	readonly filterEditing: boolean
 	readonly showFilterClear: boolean
+	readonly hideDrafts: boolean
 	readonly detailFullView: boolean
 	readonly diffFullView: boolean
 	readonly diffRangeActive: boolean
@@ -68,6 +69,7 @@ const defaultHints = (ctx: HintsContext): readonly HintItem[] => {
 	return [
 		{ key: "/", label: "filter" },
 		{ key: "esc", label: "clear", when: ctx.showFilterClear },
+		{ key: "D", label: "drafts hidden", when: ctx.hideDrafts, keyFg: colors.status.draft },
 		{
 			key: "retry",
 			label: retrying ? `${(ctx.retryProgress as { attempt: number; max: number }).attempt}/${(ctx.retryProgress as { attempt: number; max: number }).max}` : "",
